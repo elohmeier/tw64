@@ -221,6 +221,7 @@ N64_CPP = \
 	src/game/tw_audio.cpp \
 	src/game/tw_game.cpp \
 	src/game/tw_input.cpp \
+	src/game/tw_rumble.cpp \
 	src/game/tw_render.cpp
 N64_MAIN_OBJ = $(BUILD_DIR)/n64/src/main_game.o
 VARIANT_OBJ = $(BUILD_DIR)/variant/$(VARIANT).o

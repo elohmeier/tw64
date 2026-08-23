@@ -497,12 +497,6 @@ void Tw64AudioTick(CGameContext *pGameServer, const CTw64Viewport *pViewports,
   if (FlagMode)
     ScanFlags(pGameServer);
 
-  /* The event ring is per tick and is normally drained by the snapshot
-   * pipeline. The port has no snapshots, so it closes the tick the same way
-   * the dedicated server does, through the public post-snap hook. Nothing in
-   * the simulation reads the ring, so this is presentation bookkeeping only. */
-  pGameServer->OnPostSnap();
-
   const uint32_t Elapsed = (uint32_t)TICKS_SINCE(Begin);
   s_TickCycles += Elapsed;
   if (Elapsed > s_TickMaxCycles)

@@ -48,6 +48,7 @@
 #include "tw_game.h"
 #include "tw_input.h"
 #include "tw_render.h"
+#include "tw_rumble.h"
 
 namespace {
 
@@ -666,6 +667,7 @@ void ReleaseAutoDrivers() {
 bool StartMatch(const CMatchConfig &Config) {
   ReleaseAutoDrivers();
   Tw64AudioResetMatch(0);
+  Tw64RumbleStopAll();
 
   if (g_WorldInitialized) {
     /* OnShutdown() ends in CGameContext::Clear(), which destroys and
@@ -757,6 +759,9 @@ bool StartMatch(const CMatchConfig &Config) {
   }
 
   Tw64AudioResetMatch(g_pGameServer);
+  Tw64RumbleResetMatch(g_pGameServer, Config.m_NumHumans,
+                       s_aModes[Config.m_Mode].m_Flags,
+                       g_Tw64AutoplayMode == 0);
 
   g_MatchTick = 0;
   g_MatchOver = false;
@@ -849,6 +854,8 @@ void EmitStat() {
           : 0;
   CTw64AudioStats Audio;
   Tw64AudioTakeWindow(&Audio);
+  CTw64RumbleStats Rumble;
+  Tw64RumbleTakeWindow(&Rumble);
   debugf("TW64 GAME_STAT tick=%d sim_avg_us=%lu sim_max_us=%lu "
          "render_avg_us=%lu render_max_us=%lu dropped_frames=%lu frames=%lu "
          "audio_mix_avg_us=%lu audio_mix_max_us=%lu audio_tick_avg_us=%lu "
@@ -861,6 +868,15 @@ void EmitStat() {
          (unsigned long)Audio.m_MixAvgUs, (unsigned long)Audio.m_MixMaxUs,
          (unsigned long)Audio.m_TickAvgUs, (unsigned long)Audio.m_TickMaxUs,
          (unsigned long)Audio.m_Voices);
+  debugf("TW64 RUMBLE_STAT tick=%d tick_avg_us=%lu tick_max_us=%lu "
+         "update_avg_us=%lu update_max_us=%lu requests=%lu ignored=%lu "
+         "transitions=%lu writes=%lu supported=0x%x active=0x%x\n",
+         g_MatchTick, (unsigned long)Rumble.m_TickAvgUs,
+         (unsigned long)Rumble.m_TickMaxUs, (unsigned long)Rumble.m_UpdateAvgUs,
+         (unsigned long)Rumble.m_UpdateMaxUs, (unsigned long)Rumble.m_Requests,
+         (unsigned long)Rumble.m_Ignored, (unsigned long)Rumble.m_Transitions,
+         (unsigned long)Rumble.m_Writes, Rumble.m_SupportedMask,
+         Rumble.m_ActiveMask);
   g_SimWindowCycles = 0;
   g_SimWindowMaxCycles = 0;
   g_SimWindowTicks = 0;
@@ -907,11 +923,14 @@ void SimulateTick() {
   g_pGameServer->OnTick();
   const uint32_t Elapsed = (uint32_t)TICKS_SINCE(Begin);
 
-  /* Presentation only, and measured separately: the sound layer reads the
-   * tick's events and never writes anything the simulation reads back, so it
-   * is deliberately outside the sim timing window above. */
+  /* Presentation only, and measured separately: rumble and sound both read
+   * the completed tick without writing anything the simulation reads back.
+   * The shell owns the post-snap lifecycle so both consumers see the same
+   * event ring before it is cleared. */
+  Tw64RumbleTick(g_pGameServer);
   Tw64AudioTick(g_pGameServer, g_aViewports, g_NumViewports,
                 g_Match.m_NumPlayers, s_aModes[g_Match.m_Mode].m_Flags);
+  g_pGameServer->OnPostSnap();
 
   g_SimWindowCycles += Elapsed;
   if (Elapsed > g_SimWindowMaxCycles)
@@ -1065,7 +1084,8 @@ void DrawPageChrome(surface_t *pDisp, const char *pHeading, const char *pCrumb,
   if (g_Tw64AutoplayMode)
     str_copy(aBuf, "AUTOPLAY", sizeof(aBuf));
   else
-    str_format(aBuf, sizeof(aBuf), "PADS %d", Pads);
+    str_format(aBuf, sizeof(aBuf), "PADS %d  RUM %d", Pads,
+               Tw64RumbleSupportedCount());
   Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W - 8, TW64_PAGE_FOOT_TEXT,
                   aBuf, 130, 146, 180, TW64_ALIGN_RIGHT);
 }
@@ -1075,6 +1095,7 @@ void DrawPageChrome(surface_t *pDisp, const char *pHeading, const char *pCrumb,
 void DrawSimplePage(const char *pTitle, const char *pLine1,
                     const char *pLine2) {
   Tw64AudioUpdate();
+  Tw64RumbleUpdate();
   surface_t *pDisp = display_get();
   Tw64RenderBeginMenuPage(pDisp, g_PageFrame++, true);
   char aBuf[48];
@@ -1252,6 +1273,7 @@ void DrawControlsBlock(int Y) {
 
 void DrawMenuFrame(int Page, int Selection, int Pads) {
   Tw64AudioUpdate();
+  Tw64RumbleUpdate();
   BuildMenuRows(Page);
   if (Selection >= g_NumMenuRows)
     Selection = g_NumMenuRows ? g_NumMenuRows - 1 : 0;
@@ -1506,6 +1528,7 @@ void RunEndScreen() {
     ++Frames;
 
     Tw64AudioUpdate();
+    Tw64RumbleUpdate();
     surface_t *pDisp = display_get();
     /* Same backdrop and the same chrome as the menu, without the logo: the
      * headline of this page is the result, not the wordmark. */
@@ -1637,6 +1660,10 @@ void RunMatchLoop() {
       ++Steps;
     }
 
+    /* A catch-up iteration can run two game ticks, but the wall-clock output
+     * path applies only the final requested motor state once. */
+    Tw64RumbleUpdate();
+
     bool Behind = Accumulator >= TW64_TICK_US;
     if (Behind) {
       /* The tick rate is authoritative: discard the backlog instead of
@@ -1704,5 +1731,6 @@ void Tw64RunGame(void) {
     BuildViewports(Config.m_NumHumans);
     RunMatchLoop();
     RunEndScreen();
+    Tw64RumbleStopAll();
   }
 }

@@ -9,6 +9,7 @@
 
 #include "game/tw_audio.h"
 #include "game/tw_game.h"
+#include "game/tw_rumble.h"
 
 namespace {
 
@@ -36,6 +37,7 @@ int main(void) {
                FILTERS_RESAMPLE);
   dfs_init(DFS_DEFAULT_LOCATION);
   joypad_init();
+  Tw64RumbleInit();
   rdpq_init();
   ConfigureFpuForIeeeDefaults();
   /* Sound is game-ROM only: the deterministic simulation ROMs use main.cpp
@@ -44,6 +46,7 @@ int main(void) {
    * first frame is presented. */
   Tw64AudioInit();
   Tw64AudioUpdate();
+  Tw64RumbleUpdate();
   debugf("TW64 BOOT_OK memory=%d autoplay=%d\n", get_memory_size(),
          g_Tw64AutoplayMode);
 

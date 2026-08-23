@@ -3,7 +3,8 @@
 Teeworlds 64 is an unofficial, purpose-built offline adaptation of Teeworlds
 for an Expansion Pak Nintendo 64. It currently provides deterministic bots,
 one to four local players, split-screen rendering, the bundled DM/CTF/LMS
-maps and modes, and converted Teeworlds graphics and sound.
+maps and modes, converted Teeworlds graphics and sound, and per-player Rumble
+Pak feedback when the accessory is present.
 
 The port compiles shared gameplay and server rules from a pinned
 [`elohmeier/teeworlds`](https://github.com/elohmeier/teeworlds/tree/bots)

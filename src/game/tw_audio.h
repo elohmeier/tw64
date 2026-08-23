@@ -53,8 +53,8 @@ void Tw64AudioUpdate(void);
 void Tw64AudioResetMatch(CGameContext *pGameServer);
 
 /* Turns one simulated tick into sound. Call immediately after
- * CGameContext::OnTick(); it consumes the tick's event ring and clears it
- * through the ordinary CGameContext::OnPostSnap() lifecycle. */
+ * CGameContext::OnTick() and before the shell closes the shared presentation
+ * event ring through CGameContext::OnPostSnap(). */
 void Tw64AudioTick(CGameContext *pGameServer, const CTw64Viewport *pViewports,
                    int NumViewports, int NumPlayers, bool FlagMode);
 
