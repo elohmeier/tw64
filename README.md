@@ -66,8 +66,7 @@ and physical hardware validation.
 Every pull request builds and verifies the playable ROM and both simulation
 fixtures. A successful push to `main` runs semantic-release and publishes a
 conventional-commit release with `teeworlds64.z64` and its checksum attached.
-Release notes automatically explain why the simulation fixtures remain
-CI-only. Use `feat:`, `fix:`, and breaking-change commit conventions to control
+Use `feat:`, `fix:`, and breaking-change commit conventions to control
 versioning.
 
 Both upstream dependencies are immutable gitlinks. Dependabot proposes updates
