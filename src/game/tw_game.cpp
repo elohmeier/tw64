@@ -789,8 +789,7 @@ bool StartMatch(const CMatchConfig &Config) {
   }
 
   Tw64AudioResetMatch(g_pGameServer);
-  Tw64RumbleResetMatch(g_pGameServer, g_aClientByPort, TW64_MAX_HUMANS,
-                       s_aModes[Config.m_Mode].m_Flags,
+  Tw64RumbleResetMatch(g_aClientByPort, TW64_MAX_HUMANS,
                        g_Tw64AutoplayMode == 0);
 
   g_MatchTick = 0;

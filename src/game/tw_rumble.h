@@ -2,8 +2,9 @@
  *
  * Like tw_audio, this is a presentation-only consumer of authoritative game
  * state. It never changes an input, simulation object or bot observation.
- * Effects are scheduled per local-player port and reduced to binary motor
- * transitions because that is the interface exposed by an N64 Rumble Pak. */
+ * Only incoming damage schedules feedback; firing, objective actions and
+ * death notifications do not. Effects are reduced to binary motor transitions
+ * because that is the interface exposed by an N64 Rumble Pak. */
 #ifndef TW64_GAME_TW_RUMBLE_H
 #define TW64_GAME_TW_RUMBLE_H
 
@@ -16,13 +17,11 @@ class CGameContext;
  * Must run after joypad_init(). */
 void Tw64RumbleInit(void);
 
-/* Clears pending effects, adopts the new match's cumulative stat counters and
- * binds physical ports to their roster client IDs. Autoplay still runs the
- * logical scheduler for performance evidence, but AllowHardware=false
- * prevents motor activation during unattended runs. */
-void Tw64RumbleResetMatch(CGameContext *pGameServer,
-                          const int *pClientByPort, int NumPorts,
-                          bool FlagMode, bool AllowHardware);
+/* Clears pending effects and binds physical ports to their roster client IDs.
+ * Autoplay still runs the logical scheduler for performance evidence, but
+ * AllowHardware=false prevents motor activation during unattended runs. */
+void Tw64RumbleResetMatch(const int *pClientByPort, int NumPorts,
+                          bool AllowHardware);
 
 /* Consumes one completed simulation tick. Call after CGameContext::OnTick()
  * and before CGameContext::OnPostSnap(), while the tick's event ring exists. */
