@@ -13,6 +13,7 @@ PYTHON ?= python3
 CMAKE ?= cmake
 VARIANT ?= game
 FP_SAFETY_TEST = $(PROJECT_ROOT)/build/tests/fp_safety_test
+CLOSEST_POINT_TEST = $(PROJECT_ROOT)/build/tests/closest_point_test
 
 # The generated protocol/data tables come from the pinned host source so the
 # ROM and its deterministic reference executable cannot drift apart.
@@ -40,8 +41,14 @@ $(FP_SAFETY_TEST): tests/fp_safety_test.cpp src/platform/tw_fp_safety.h
 	@mkdir -p $(dir $@)
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(PROJECT_ROOT) $< -o $@
 
-verify-fp-safety: $(FP_SAFETY_TEST)
+$(CLOSEST_POINT_TEST): tests/closest_point_test.cpp patches/teeworlds-n64.patch | prepare
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror \
+		-I$(PATCHED_TEEWORLDS_DIR) $< -o $@
+
+verify-fp-safety: $(FP_SAFETY_TEST) $(CLOSEST_POINT_TEST)
 	$(FP_SAFETY_TEST)
+	$(CLOSEST_POINT_TEST)
 
 # Build libdragon from the pinned upstream preview submodule. The Dockerfile's
 # base image digest pins the compiler layer independently from this source pin.
