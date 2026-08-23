@@ -72,6 +72,7 @@ struct CPlayerTracker {
 
 CPortState s_aPorts[JOYPAD_PORT_COUNT];
 CPlayerTracker s_aTrackers[JOYPAD_PORT_COUNT];
+int s_aClientByPort[JOYPAD_PORT_COUNT];
 int s_NumHumans;
 bool s_FlagMode;
 bool s_AllowHardware;
@@ -170,7 +171,11 @@ ERumbleEffect ShotEffect(const CGameContext::CPlayerStats &Stats,
 
 void ScanStats(CGameContext *pGameServer, uint64_t NowUs) {
   for (int Port = 0; Port < s_NumHumans; ++Port) {
-    const CGameContext::CPlayerStats &Stats = pGameServer->m_aPlayerStats[Port];
+    const int ClientID = s_aClientByPort[Port];
+    if (ClientID < 0 || ClientID >= MAX_CLIENTS)
+      continue;
+    const CGameContext::CPlayerStats &Stats =
+        pGameServer->m_aPlayerStats[ClientID];
     CPlayerTracker &Tracker = s_aTrackers[Port];
 
     const ERumbleEffect Shot = ShotEffect(Stats, &Tracker);
@@ -198,14 +203,16 @@ void ScanDamageEvents(CGameContext *pGameServer, uint64_t NowUs) {
     if (Events.EventType(i) == NETEVENTTYPE_DAMAGE) {
       const CNetEvent_Damage *pDamage =
           (const CNetEvent_Damage *)Events.EventData(i);
-      if (pDamage->m_ClientID >= 0 && pDamage->m_ClientID < s_NumHumans)
-        aDamage[pDamage->m_ClientID] +=
-            pDamage->m_HealthAmount + pDamage->m_ArmorAmount;
+      for (int Port = 0; Port < s_NumHumans; ++Port)
+        if (pDamage->m_ClientID == s_aClientByPort[Port])
+          aDamage[Port] +=
+              pDamage->m_HealthAmount + pDamage->m_ArmorAmount;
     } else if (Events.EventType(i) == NETEVENTTYPE_DEATH) {
       const CNetEvent_Death *pDeath =
           (const CNetEvent_Death *)Events.EventData(i);
-      if (pDeath->m_ClientID >= 0 && pDeath->m_ClientID < s_NumHumans)
-        aDeath[pDeath->m_ClientID] = true;
+      for (int Port = 0; Port < s_NumHumans; ++Port)
+        if (pDeath->m_ClientID == s_aClientByPort[Port])
+          aDeath[Port] = true;
     }
   }
 
@@ -318,6 +325,8 @@ unsigned Tw64RumbleSelfTest(void) {
 void Tw64RumbleInit(void) {
   memset(s_aPorts, 0, sizeof(s_aPorts));
   memset(s_aTrackers, 0, sizeof(s_aTrackers));
+  for (int Port = 0; Port < JOYPAD_PORT_COUNT; ++Port)
+    s_aClientByPort[Port] = -1;
   s_NumHumans = 0;
   s_FlagMode = false;
   s_AllowHardware = false;
@@ -342,26 +351,34 @@ void Tw64RumbleStopAll(void) {
       ++s_WindowWrites;
     }
     ClearPort(&s_aPorts[Port]);
+    s_aClientByPort[Port] = -1;
   }
   s_NumHumans = 0;
   s_FlagMode = false;
   s_AllowHardware = false;
 }
 
-void Tw64RumbleResetMatch(CGameContext *pGameServer, int NumHumans,
+void Tw64RumbleResetMatch(CGameContext *pGameServer,
+                          const int *pClientByPort, int NumPorts,
                           bool FlagMode, bool AllowHardware) {
   Tw64RumbleStopAll();
   memset(s_aTrackers, 0, sizeof(s_aTrackers));
-  s_NumHumans = NumHumans < JOYPAD_PORT_COUNT ? NumHumans : JOYPAD_PORT_COUNT;
+  s_NumHumans = NumPorts < JOYPAD_PORT_COUNT ? NumPorts : JOYPAD_PORT_COUNT;
   if (s_NumHumans < 0)
     s_NumHumans = 0;
   s_FlagMode = FlagMode;
   s_AllowHardware = AllowHardware;
 
+  for (int Port = 0; Port < s_NumHumans; ++Port)
+    s_aClientByPort[Port] = pClientByPort ? pClientByPort[Port] : -1;
+
   if (pGameServer) {
     for (int Port = 0; Port < s_NumHumans; ++Port) {
+      const int ClientID = s_aClientByPort[Port];
+      if (ClientID < 0 || ClientID >= MAX_CLIENTS)
+        continue;
       const CGameContext::CPlayerStats &Stats =
-          pGameServer->m_aPlayerStats[Port];
+          pGameServer->m_aPlayerStats[ClientID];
       memcpy(s_aTrackers[Port].m_aWeaponShots, Stats.m_aWeaponShots,
              sizeof(s_aTrackers[Port].m_aWeaponShots));
       s_aTrackers[Port].m_FlagGrabs = Stats.m_FlagGrabs;
@@ -370,8 +387,11 @@ void Tw64RumbleResetMatch(CGameContext *pGameServer, int NumHumans,
     }
   }
   ResetWindow();
-  debugf("TW64 RUMBLE_MATCH ports=%d hardware=%d flags=%d supported=0x%x\n",
-         s_NumHumans, s_AllowHardware ? 1 : 0, s_FlagMode ? 1 : 0,
+  debugf("TW64 RUMBLE_MATCH ports=%d clients=%d,%d,%d,%d hardware=%d "
+         "flags=%d supported=0x%x\n",
+         s_NumHumans, s_aClientByPort[0], s_aClientByPort[1],
+         s_aClientByPort[2], s_aClientByPort[3],
+         s_AllowHardware ? 1 : 0, s_FlagMode ? 1 : 0,
          Tw64RumbleSupportedMask());
 }
 

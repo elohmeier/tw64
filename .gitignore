@@ -12,3 +12,6 @@
 /node_modules/
 *.log
 __pycache__/
+# Internal N64 progress reporting
+/website/
+/artifacts/progress/

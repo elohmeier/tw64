@@ -57,6 +57,7 @@ struct CTw64RenderInfo {
   int m_NumViewports;
   int m_NumPlayers;
   const char *const *m_apPlayerNames;
+  const int *m_pPlayerAvatars;
   bool m_ShowScoreboard;
   /* Three local players leave one quadrant free; it becomes a permanent
    * scoreboard panel instead of dead space. */
@@ -113,9 +114,11 @@ void Tw64RenderTextF(int Font, int X, int Y, const char *pText, uint8_t R,
 void Tw64RenderShade(int X, int Y, int W, int H, uint8_t R, uint8_t G,
                      uint8_t B, uint8_t A);
 
-/* Draws one build-rendered 128x96 map preview into an attached menu page.
- * `MapIndex` follows the staged map catalog order in tw_game.cpp. */
-void Tw64RenderMapPreview(int MapIndex, int X, int Y);
+/* Begins the visual level browser with one build-rendered 160x120 preview as
+ * its full 320x240 background. The exact 2x scale keeps all sixteen previews
+ * resident at a bounded cost while making the level, not its filename, the
+ * primary object. `MapIndex` follows the staged catalog in tw_game.cpp. */
+void Tw64RenderBeginMapPage(surface_t *pDisp, int MapIndex);
 
 /* The full-screen menu/end-screen background: a night-sky gradient, two
  * drifting clouds and a mountain silhouette, all from the desktop client's own
@@ -123,6 +126,12 @@ void Tw64RenderMapPreview(int MapIndex, int X, int Y);
  * false for pages that carry their own headline. Attaches `pDisp`, so the
  * caller must finish with Tw64RenderEndPage(). */
 void Tw64RenderBeginMenuPage(surface_t *pDisp, int Frame, bool ShowLogo);
+
+/* Draws one staged tee silhouette for the shared character-select grid. The
+ * signature colour is presentation-only; team matches recolour the same
+ * silhouette blue or red so side recognition remains immediate. */
+void Tw64RenderAvatar(int Avatar, int CenterX, int CenterY, int Size);
+void Tw64AvatarColor(int Avatar, uint8_t *pR, uint8_t *pG, uint8_t *pB);
 
 /* Stable per-slot colour, shared by HUD labels, scoreboard and tee body tint. */
 void Tw64PlayerColor(int ClientID, uint8_t *pR, uint8_t *pG, uint8_t *pB);

@@ -17,10 +17,11 @@ class CGameContext;
 void Tw64RumbleInit(void);
 
 /* Clears pending effects, adopts the new match's cumulative stat counters and
- * selects the local client/port range. Autoplay still runs the logical
- * scheduler for performance evidence, but AllowHardware=false prevents motor
- * activation during unattended runs. */
-void Tw64RumbleResetMatch(CGameContext *pGameServer, int NumHumans,
+ * binds physical ports to their roster client IDs. Autoplay still runs the
+ * logical scheduler for performance evidence, but AllowHardware=false
+ * prevents motor activation during unattended runs. */
+void Tw64RumbleResetMatch(CGameContext *pGameServer,
+                          const int *pClientByPort, int NumPorts,
                           bool FlagMode, bool AllowHardware);
 
 /* Consumes one completed simulation tick. Call after CGameContext::OnTick()

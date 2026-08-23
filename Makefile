@@ -11,9 +11,12 @@ HOST_BUILD ?= $(PROJECT_ROOT)/build/host
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 PYTHON ?= python3
 CMAKE ?= cmake
+GOPHER64 ?= $(HOME)/.cargo/bin/gopher64
 VARIANT ?= game
 FP_SAFETY_TEST = $(PROJECT_ROOT)/build/tests/fp_safety_test
 CLOSEST_POINT_TEST = $(PROJECT_ROOT)/build/tests/closest_point_test
+LOBBY_TEST = $(PROJECT_ROOT)/build/tests/lobby_test
+MENU_FLOW_TEST = $(PROJECT_ROOT)/build/tests/menu_flow_test
 
 # The generated protocol/data tables come from the pinned host source so the
 # ROM and its deterministic reference executable cannot drift apart.
@@ -31,11 +34,12 @@ SIM_VARIANTS = s1 s2
 AUTOPLAY_VARIANTS = \
 	auto-1p-easy auto-1p-medium auto-1p-hard auto-4view auto-soak \
 	auto-1p-hard-dm6 auto-2view auto-3view auto-ctf auto-ctf5 \
-	auto-ctf-long auto-tdm auto-lms auto-lts auto-maps
+	auto-ctf-long auto-tdm auto-lms auto-lts auto-maps \
+	auto-flex-teams auto-human-1v1 auto-menu-review auto-bot-bench
 GAME_VARIANTS = game $(AUTOPLAY_VARIANTS)
 
 .PHONY: image host prepare generated rom rom-all rom-sim rom-game rom-autoplay stage \
-	verify-fp-safety verify-host verify-rom package ci clean
+	benchmark-bots verify-fp-safety verify-host verify-rom package ci clean
 
 $(FP_SAFETY_TEST): tests/fp_safety_test.cpp src/platform/tw_fp_safety.h
 	@mkdir -p $(dir $@)
@@ -46,9 +50,21 @@ $(CLOSEST_POINT_TEST): tests/closest_point_test.cpp patches/teeworlds-n64.patch 
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror \
 		-I$(PATCHED_TEEWORLDS_DIR) $< -o $@
 
-verify-fp-safety: $(FP_SAFETY_TEST) $(CLOSEST_POINT_TEST)
+$(LOBBY_TEST): tests/lobby_test.cpp src/game/tw_lobby.cpp src/game/tw_lobby.h
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(PROJECT_ROOT) \
+		tests/lobby_test.cpp src/game/tw_lobby.cpp -o $@
+
+$(MENU_FLOW_TEST): tests/menu_flow_test.cpp src/game/tw_menu.cpp src/game/tw_menu.h
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(PROJECT_ROOT) \
+		tests/menu_flow_test.cpp src/game/tw_menu.cpp -o $@
+
+verify-fp-safety: $(FP_SAFETY_TEST) $(CLOSEST_POINT_TEST) $(LOBBY_TEST) $(MENU_FLOW_TEST)
 	$(FP_SAFETY_TEST)
 	$(CLOSEST_POINT_TEST)
+	$(LOBBY_TEST)
+	$(MENU_FLOW_TEST)
 
 # Build libdragon from the pinned upstream preview submodule. The Dockerfile's
 # base image digest pins the compiler layer independently from this source pin.
@@ -80,8 +96,17 @@ ASSET_SOURCES = \
 	$(TEEWORLDS_DIR)/datasrc/content.py \
 	$(TEEWORLDS_DIR)/datasrc/game.png \
 	$(TEEWORLDS_DIR)/datasrc/skins/body/standard.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/kitty.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/bear.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/fox.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/koala.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/monkey.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/piglet.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/body/spiky.png \
 	$(TEEWORLDS_DIR)/datasrc/skins/feet/standard.png \
 	$(TEEWORLDS_DIR)/datasrc/skins/eyes/standard.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/eyes/negative.png \
+	$(TEEWORLDS_DIR)/datasrc/skins/eyes/colorable.png \
 	$(TEEWORLDS_DIR)/datasrc/ui/gui_logo.png \
 	$(wildcard $(TEEWORLDS_DIR)/datasrc/mapres/*.png) \
 	$(foreach m,$(ROM_MAPS),$(TEEWORLDS_DIR)/datasrc/maps/$(m).map)
@@ -199,6 +224,22 @@ rom-autoplay: stage
 	@for v in $(AUTOPLAY_VARIANTS); do \
 		$(BUILD_ROM) VARIANT=$$v || exit 1; \
 	done
+
+# Guest-cycle benchmark: one neutral human and 1..15 hard bots in a single
+# viewport. Video is only the accelerated execution transport; the analyzer
+# reads BOT_BENCH markers produced from target counters every 500 ticks.
+benchmark-bots: stage
+	$(BUILD_ROM) VARIANT=auto-bot-bench
+	@mkdir -p build/benchmark
+	$(GOPHER64) teeworlds64-auto-bot-bench.z64 \
+		--capture-output build/benchmark/bot-benchmark.mp4 \
+		--capture-duration 155 --capture-framerate 10 \
+		--capture-width 320 --capture-height 240 \
+		--capture-start-marker "TW64 MENU_OK" --capture-warmup 0 \
+		--capture-start-timeout 60 --capture-wall-timeout 180 \
+		>build/benchmark/bot-benchmark.log 2>&1
+	$(PYTHON) scripts/analyze_bot_benchmark.py \
+		--require-bots 5 build/benchmark/bot-benchmark.log
 
 # The two deterministic simulation ROMs.
 rom-sim: stage

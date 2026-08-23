@@ -17,13 +17,14 @@ Five asset classes, four deliberate formats:
 * ``gfx/spr_*.sprite`` -- RGBA16 cut-outs of ``game.png`` (weapons, projectiles,
   hook, pickups, flags, HUD icons). Small, individually colourful, never
   tinted, and RGBA16's single alpha bit is enough at 8-35 screen pixels.
-* ``gfx/tee_*.sprite`` -- IA8 tee parts. The 0.7 parts are greyscale plus alpha
+* ``gfx/tee_*.sprite`` -- IA8 tee atlases. The 0.7 parts are greyscale plus alpha
   by construction, which is exactly what IA8 stores, and it lets the renderer
   reproduce the desktop colourisation (``texel_rgb * color_rgb``) with a single
   RDP primitive-colour modulate instead of shipping one texture per player
-  colour. The body composes outline + body + shadow + upper outline into one
-  sprite, and the foot composes outline + foot; the intensity channel keeps the
-  outline black, so tinting a composed part is still the desktop result.
+  colour. Eight recognizable body silhouettes are staged for the local
+  character-select grid. Each atlas composes outline + body + shadow + upper
+  outline into one sprite and outline + foot into another; the intensity
+  channel keeps the outline black, so tinting remains the desktop result.
 * ``gfx/ui_*.sprite`` -- the menu's own art: the official ``gui_logo.png`` and
   the sky backdrop layers (clouds and mountains) the desktop menu themes are
   built from. The logo is RGBA32 because it is the one asset whose soft glow
@@ -38,10 +39,10 @@ Five asset classes, four deliberate formats:
   90 degrees clockwise, because the RDP's texture rectangle cannot transpose
   the S/T axes; the renderer loads it lazily, only for maps that actually use
   ``TILEFLAG_ROTATE``.
-* ``gfx/map_preview_*.sprite`` -- CI8 menu thumbnails rendered deterministically
-  from each map's target-visible tile layers. Each map keeps its own 256-colour
-  palette; a generated contact sheet makes the automatic camera crops easy to
-  review without booting an emulator.
+* ``gfx/map_preview_*.sprite`` -- CI8 level-browser frames rendered
+  deterministically from each map's target-visible tile layers. Each map keeps
+  its own 256-colour palette; a generated contact sheet makes the automatic
+  camera crops easy to review without booting an emulator.
 
 The PNG slicing runs on the host with Pillow; the PNG -> ``.sprite``
 conversion runs ``mksprite`` inside the libdragon toolchain container, the same
@@ -79,29 +80,46 @@ TILE_PIXELS = 16  # per tileset tile, drawn at 12 screen pixels
 TILES_PER_ROW = 16  # the client's fixed 16x16 tileset grid
 
 # Map-menu previews are rendered at twice their stored size, then reduced once
-# with Pillow's high-quality filter. The working canvas uses the target's own
-# 0.375 world scale, so the thumbnail shows a slightly tighter, more legible
-# 21x16-tile camera without inventing a separate map-art style.
-MAP_PREVIEW_W = 128
-MAP_PREVIEW_H = 96
+# with Pillow's high-quality filter. The working canvas preserves the previous
+# 21x16-tile camera, so the larger frame adds detail without inventing a
+# separate map-art style or changing what part of a level players recognize.
+# Sixteen previews stay resident with the rest of the fixed UI sprite set.
+# 160x120 is an exact half-resolution 4:3 frame: the level browser can draw it
+# full-screen at 2x without the 1.2 MiB cost of storing every preview at
+# 320x240 or the fractional 2.5x scale of the previous thumbnail.
+MAP_PREVIEW_W = 160
+MAP_PREVIEW_H = 120
 MAP_PREVIEW_SUPERSAMPLE = 2
 MAP_PREVIEW_RENDER_W = MAP_PREVIEW_W * MAP_PREVIEW_SUPERSAMPLE
 MAP_PREVIEW_RENDER_H = MAP_PREVIEW_H * MAP_PREVIEW_SUPERSAMPLE
-MAP_PREVIEW_WORLD_SCALE = 0.375
+# Preserve the previous 21x16-tile camera crop despite the larger stored
+# frame: 160 / 128 * 0.375. The full-screen 2x presentation therefore adds
+# detail without changing which part of each map the player recognizes.
+MAP_PREVIEW_WORLD_SCALE = 0.46875
 MAP_TILE_WORLD_SIZE = 32
 
 # Automatic anchors are deliberately the default. A map may opt into an
 # art-directed camera in tile coordinates if the generated contact sheet shows
 # that its spawn/flag midpoint is not its most recognisable room.
 MAP_PREVIEW_CAMERA_OVERRIDES = {
+    # Spawn medians can land on a bare traversal shaft in these large or
+    # symmetric maps. Use a nearby landmark cluster instead: the preview is a
+    # recognition aid, not a statistical summary of entity positions.
+    "dm2": (62.5, 14.5),
+    "dm7": (36.5, 17.5),
+    "lms1": (36.5, 11.5),
     # These very wide CTF maps have visually sparse midfields. Frame the red
     # base instead: it carries the same mirrored geometry as blue and shows
-    # more of each map's material language at thumbnail scale.
+    # more of each map's material language in the level browser.
+    "ctf1": (14.5, 13.5),
     "ctf2": (35.5, 26.5),
     "ctf5": (32.5, 61.5),
     # ctf4's flag stands are at the bottom edge; the central spawn deck is the
     # representative jungle room and avoids a crop dominated by the border.
     "ctf4": (90.5, 25.5),
+    # CTF7's left base is sparse; the mirrored right approach carries its
+    # characteristic trees, stepped bridge and overhang in one frame.
+    "ctf7": (44.5, 20.5),
 }
 
 # name in content.py -> (output basename, width, height)
@@ -152,10 +170,21 @@ TEE_BODY_CELLS = [
 ]
 TEE_FOOT_CELLS = ["tee_foot_outline", "tee_foot"]
 
-TEE_PARTS = [
-    ("tee_body", "skins/body/standard.png", TEE_BODY_CELLS, 32, 32),
-    ("tee_foot", "skins/feet/standard.png", TEE_FOOT_CELLS, 16, 16),
-    ("tee_eyes", "skins/eyes/standard.png", ["tee_eyes_normal"], 24, 12),
+# Party-facing subset of the desktop client's built-in skin library. The grid
+# deliberately uses eight strong silhouettes rather than exposing the full
+# six-part desktop editor during couch setup. Markings, decorations, hands and
+# independent part colours remain a possible workshop screen, not hidden state
+# in this quick match flow. Keep the order synchronized with TW64_AVATAR_* in
+# tw_lobby.h and the renderer's sprite enum.
+TEE_AVATARS = [
+    ("classic", "standard", "standard"),
+    ("kitty", "kitty", "negative"),
+    ("bear", "bear", "standard"),
+    ("fox", "fox", "colorable"),
+    ("koala", "koala", "standard"),
+    ("monkey", "monkey", "standard"),
+    ("piggy", "piglet", "colorable"),
+    ("spiky", "spiky", "colorable"),
 ]
 
 # The three parts are packed into one 56x32 IA8 atlas (1792 bytes, comfortably
@@ -908,27 +937,36 @@ def compose_tee_part(
 
 
 def convert_tee_parts(datasrc: str, content: Content, scratch: str) -> list:
-    atlas = Image.new("RGBA", (TEE_ATLAS_W, TEE_ATLAS_H), (0, 0, 0, 0))
-    for out, png, cells, w, h in TEE_PARTS:
-        img = compose_tee_part(datasrc, content, png, cells, w, h)
-        # The 0.7 parts are greyscale by construction; the renderer relies on
-        # that to reproduce the desktop "grey texel * skin colour" modulate.
-        for pixel in img.get_flattened_data():
-            r, g, b, a = pixel
-            if a > 8 and not (r == g == b):
+    jobs = []
+    for avatar, body, eyes in TEE_AVATARS:
+        atlas = Image.new("RGBA", (TEE_ATLAS_W, TEE_ATLAS_H), (0, 0, 0, 0))
+        parts = [
+            ("tee_body", f"skins/body/{body}.png", TEE_BODY_CELLS, 32, 32),
+            ("tee_foot", "skins/feet/standard.png", TEE_FOOT_CELLS, 16, 16),
+            ("tee_eyes", f"skins/eyes/{eyes}.png", ["tee_eyes_normal"], 24, 12),
+        ]
+        for out, png, cells, w, h in parts:
+            img = compose_tee_part(datasrc, content, png, cells, w, h)
+            # The staged 0.7 parts are greyscale by construction; the renderer
+            # relies on that for the "grey texel * skin colour" modulate.
+            for pixel in img.get_flattened_data():
+                r, g, b, a = pixel
+                if a > 8 and not (r == g == b):
+                    raise ConvertError(
+                        f"tee part '{avatar}/{out}' is not greyscale "
+                        f"({r},{g},{b}); IA8 tinting would silently drop its hue"
+                    )
+            x, y = TEE_ATLAS_PLACEMENT[out]
+            if x + w > TEE_ATLAS_W or y + h > TEE_ATLAS_H:
                 raise ConvertError(
-                    f"tee part '{out}' is not greyscale ({r},{g},{b}); IA8 tinting "
-                    "would silently drop its hue"
+                    f"tee part '{avatar}/{out}' does not fit the "
+                    f"{TEE_ATLAS_W}x{TEE_ATLAS_H} atlas"
                 )
-        x, y = TEE_ATLAS_PLACEMENT[out]
-        if x + w > TEE_ATLAS_W or y + h > TEE_ATLAS_H:
-            raise ConvertError(
-                f"tee part '{out}' does not fit the {TEE_ATLAS_W}x{TEE_ATLAS_H} atlas"
-            )
-        atlas.paste(img, (x, y))
-    path = os.path.join(scratch, "tee_parts.png")
-    atlas.save(path)
-    return [Job(path, "IA8")]
+            atlas.paste(img, (x, y))
+        path = os.path.join(scratch, f"tee_{avatar}.png")
+        atlas.save(path)
+        jobs.append(Job(path, "IA8"))
+    return jobs
 
 
 def build_tileset_sheet(source: Image.Image, rotate: bool) -> Image.Image:
@@ -1113,7 +1151,10 @@ def main(argv=None) -> int:
         os.path.join(datasrc, "content.py"),
         os.path.join(datasrc, "game.png"),
     ]
-    inputs += [os.path.join(datasrc, png) for _o, png, _c, _w, _h in TEE_PARTS]
+    for _avatar, body, eyes in TEE_AVATARS:
+        inputs.append(os.path.join(datasrc, "skins", "body", f"{body}.png"))
+        inputs.append(os.path.join(datasrc, "skins", "eyes", f"{eyes}.png"))
+    inputs.append(os.path.join(datasrc, "skins", "feet", "standard.png"))
     inputs += [os.path.join(datasrc, png) for _o, png, _w, _h, _f, _c in UI_SPRITES]
     inputs += [os.path.join(maps_dir, f"{m}.map") for m in ROM_MAPS]
     inputs += [

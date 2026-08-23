@@ -2,9 +2,10 @@
 
 Teeworlds 64 is an unofficial, purpose-built offline adaptation of Teeworlds
 for an Expansion Pak Nintendo 64. It currently provides deterministic bots,
-one to four local players, split-screen rendering, the bundled DM/CTF/LMS
-maps and modes, converted Teeworlds graphics and sound, and per-player Rumble
-Pak feedback when the accessory is present.
+one to four local players, flexible human/bot rosters on either team,
+split-screen rendering, the bundled DM/CTF/LMS maps and modes, converted
+Teeworlds graphics and sound, and per-player Rumble Pak feedback when the
+accessory is present.
 
 The port compiles shared gameplay and server rules from a pinned
 [`elohmeier/teeworlds`](https://github.com/elohmeier/teeworlds/tree/bots)
@@ -67,9 +68,26 @@ simulation fixtures print and hash fixed matches without the playable menu or
 renderer; CI verifies them, but releases do not publish them.
 
 `make rom-all` additionally creates all unattended autoplay variants used for
-local emulator and hardware qualification. Emulator throughput is automation
-evidence only; real 50 Hz performance still needs emulator cycle measurements
-and physical hardware validation.
+local emulator and hardware qualification. Capture throughput is automation
+evidence only; `make benchmark-bots` measures guest cycles and frame windows,
+while physical-console performance remains a separate validation gate.
+
+`make benchmark-bots` runs the guest-timed hard-bot sweep. The current
+Gopher64 evidence supports five hard bots at 60 fps and uses that as the menu
+cap; seven bots fall below 50 fps. See
+[the flexible-team design and benchmark](docs/flexible-team-menu.md) for the
+interaction model, full table, reproduction steps, and evidence boundary.
+
+The controller-driven setup uses screen-specific layouts: players join their
+own slots, every controller chooses and locks a bundled tee silhouette, the
+host owns global choices, invalid rosters explain the repair, and the level
+browser gives the preview the full screen. Player-facing screens keep internal
+IDs, benchmark notes, and controller diagnostics in logs and reports. See the
+[human-centered menu review](docs/menu-human-centered-design.md) for the
+screen audit, recovery states, representative tasks, and validation criteria.
+The [team and avatar design](docs/team-and-avatar-design.md) documents the
+character-select model and why three-way squads require a distinct game mode
+rather than another row in the existing two-team setup.
 
 ## Releases and updates
 

@@ -69,6 +69,7 @@
 #include <game/server/player.h>
 
 #include "tw_render.h"
+#include "tw_lobby.h"
 
 namespace {
 
@@ -116,7 +117,15 @@ enum {
   SPR_MUZZLE_SHOTGUN1,
   SPR_MUZZLE_SHOTGUN2,
   SPR_MUZZLE_SHOTGUN3,
-  SPR_TEE_PARTS,
+  /* Eight one-upload IA8 atlases in TW64_AVATAR_* order. */
+  SPR_TEE_CLASSIC,
+  SPR_TEE_KITTY,
+  SPR_TEE_BEAR,
+  SPR_TEE_FOX,
+  SPR_TEE_KOALA,
+  SPR_TEE_MONKEY,
+  SPR_TEE_PIGGY,
+  SPR_TEE_SPIKY,
   /* Menu art. Unlike everything above, these are larger than TMEM and are
    * therefore always drawn through rdpq_sprite_blit (which slices them), never
    * through BindSprite(). */
@@ -143,6 +152,7 @@ enum {
   SPR_MAP_PREVIEW_CTF7,
   SPR_MAP_PREVIEW_CTF8,
   NUM_SPRITES,
+  SPR_TEE_FIRST = SPR_TEE_CLASSIC,
   SPR_MAP_PREVIEW_FIRST = SPR_MAP_PREVIEW_DM1,
   NUM_MAP_PREVIEWS = SPR_MAP_PREVIEW_CTF8 - SPR_MAP_PREVIEW_FIRST + 1
 };
@@ -183,7 +193,14 @@ const char *const s_apSpriteFiles[NUM_SPRITES] = {
     "rom:/gfx/spr_muzzle_shotgun1.sprite",
     "rom:/gfx/spr_muzzle_shotgun2.sprite",
     "rom:/gfx/spr_muzzle_shotgun3.sprite",
-    "rom:/gfx/tee_parts.sprite",
+    "rom:/gfx/tee_classic.sprite",
+    "rom:/gfx/tee_kitty.sprite",
+    "rom:/gfx/tee_bear.sprite",
+    "rom:/gfx/tee_fox.sprite",
+    "rom:/gfx/tee_koala.sprite",
+    "rom:/gfx/tee_monkey.sprite",
+    "rom:/gfx/tee_piggy.sprite",
+    "rom:/gfx/tee_spiky.sprite",
     "rom:/gfx/ui_logo.sprite",
     "rom:/gfx/ui_cloud1.sprite",
     "rom:/gfx/ui_cloud2.sprite",
@@ -461,6 +478,12 @@ const uint32_t COLOR_WHITE = PackColor(255, 255, 255);
 
 const CRgb s_aPlayerColors[TW64_MAX_VIEWPORTS] = {
     {90, 170, 255}, {255, 96, 96}, {110, 230, 130}, {250, 210, 80}};
+
+/* Natural character-select colours. They make the grid playful and easy to
+ * scan; match rendering substitutes the blue/red team hue in team modes. */
+const CRgb s_aAvatarColors[TW64_NUM_AVATARS] = {
+    {245, 174, 88},  {102, 188, 245}, {190, 126, 76}, {245, 126, 52},
+    {184, 192, 205}, {216, 154, 78},  {247, 146, 187}, {158, 220, 92}};
 
 /* Team hues. The second member of a team gets the darker shade so two
  * teammates never share one silhouette colour while both still read as their
@@ -1155,9 +1178,22 @@ uint32_t TeeColor(const CTw64RenderInfo *pInfo, int ClientID) {
   if (pInfo->m_Teamplay && ClientID >= 0 && ClientID < MAX_CLIENTS &&
       s_aTeam[ClientID] >= 0)
     Tw64TeamColor(s_aTeam[ClientID], s_aSlotInTeam[ClientID], &R, &G, &B);
+  else if (pInfo->m_pPlayerAvatars && ClientID >= 0 &&
+           ClientID < pInfo->m_NumPlayers)
+    Tw64AvatarColor(pInfo->m_pPlayerAvatars[ClientID], &R, &G, &B);
   else
     Tw64PlayerColor(ClientID, &R, &G, &B);
   return PackColor(R, G, B);
+}
+
+int TeeSprite(const CTw64RenderInfo *pInfo, int ClientID) {
+  int Avatar = TW64_AVATAR_CLASSIC;
+  if (pInfo->m_pPlayerAvatars && ClientID >= 0 &&
+      ClientID < pInfo->m_NumPlayers)
+    Avatar = pInfo->m_pPlayerAvatars[ClientID];
+  if (Avatar < 0 || Avatar >= TW64_NUM_AVATARS)
+    Avatar = TW64_AVATAR_CLASSIC;
+  return SPR_TEE_FIRST + Avatar;
 }
 
 /* --------------------------------------------------------------------- */
@@ -1421,6 +1457,7 @@ void DrawTee(CGameContext *pGameServer, const CTw64RenderInfo *pInfo,
   const float BodyCx = (float)ScreenX(Cam, Pos.x + BodyX);
   const float BodyCy = (float)ScreenY(Cam, Pos.y + BodyY);
   const float FootW = 64.0f / 2.1f * SCALE;
+  const int TeeParts = TeeSprite(pInfo, ClientID);
   const uint32_t Color = TeeColor(pInfo, ClientID);
   const uint8_t R = (uint8_t)(Color >> 24);
   const uint8_t G = (uint8_t)(Color >> 16);
@@ -1433,25 +1470,25 @@ void DrawTee(CGameContext *pGameServer, const CTw64RenderInfo *pInfo,
 
   /* Draw order is the desktop client's: back foot, body, eyes, front foot. */
   rdpq_set_prim_color(RGBA32(Fr, Fg, Fb, 255));
-  DrawSubCentered(SPR_TEE_PARTS, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW,
+  DrawSubCentered(TeeParts, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW,
                   TEE_FOOT_SH, (float)ScreenX(Cam, Pos.x + BackX),
                   (float)ScreenY(Cam, Pos.y + BackY), FootW, FootW, false,
                   false);
 
   rdpq_set_prim_color(RGBA32(R, G, B, 255));
-  DrawSubCentered(SPR_TEE_PARTS, TEE_BODY_SX, TEE_BODY_SY, TEE_BODY_SW,
+  DrawSubCentered(TeeParts, TEE_BODY_SX, TEE_BODY_SY, TEE_BODY_SW,
                   TEE_BODY_SH, BodyCx, BodyCy, 64.0f * SCALE, 64.0f * SCALE,
                   false, false);
 
   /* Eyes: 60% of the body size wide, half that tall, nudged towards the aim. */
   rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-  DrawSubCentered(SPR_TEE_PARTS, TEE_EYES_SX, TEE_EYES_SY, TEE_EYES_SW,
+  DrawSubCentered(TeeParts, TEE_EYES_SX, TEE_EYES_SY, TEE_EYES_SW,
                   TEE_EYES_SH, BodyCx + Ax * 8.0f * SCALE,
                   BodyCy + (-3.2f + Ay * 6.4f) * SCALE, 64.0f * 0.60f * SCALE,
                   64.0f * 0.30f * SCALE, false, false);
 
   rdpq_set_prim_color(RGBA32(Fr, Fg, Fb, 255));
-  DrawSubCentered(SPR_TEE_PARTS, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW,
+  DrawSubCentered(TeeParts, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW,
                   TEE_FOOT_SH, (float)ScreenX(Cam, Pos.x + FrontX),
                   (float)ScreenY(Cam, Pos.y + FrontY), FootW, FootW, false,
                   false);
@@ -1619,9 +1656,12 @@ void DrawHudText(surface_t *pDisp, CGameContext *pGameServer,
       View.m_ClientID < MAX_CLIENTS && s_aTeam[View.m_ClientID] >= 0)
     Tw64TeamColor(s_aTeam[View.m_ClientID], s_aSlotInTeam[View.m_ClientID],
                   &aColors[0].m_R, &aColors[0].m_G, &aColors[0].m_B);
-  else
-    Tw64PlayerColor(View.m_ClientID, &aColors[0].m_R, &aColors[0].m_G,
-                    &aColors[0].m_B);
+  else {
+    const uint32_t Color = TeeColor(pInfo, View.m_ClientID);
+    aColors[0].m_R = (uint8_t)(Color >> 24);
+    aColors[0].m_G = (uint8_t)(Color >> 16);
+    aColors[0].m_B = (uint8_t)(Color >> 8);
+  }
   aColors[1].m_R = aColors[1].m_G = aColors[1].m_B = 200;
   aColors[2].m_R = 255;
   aColors[2].m_G = 240;
@@ -1687,27 +1727,30 @@ void DrawFlagPip(int X, int Y, int Team) {
 }
 
 void DrawScoreboardText(surface_t *pDisp, CGameContext *pGameServer,
-                        const CTw64RenderInfo *pInfo, int BoxX, int BoxY) {
+                        const CTw64RenderInfo *pInfo, int BoxX, int BoxY,
+                        int MaxRows) {
   char aHeader[32];
   if (pInfo->m_Teamplay)
-    str_format(aHeader, sizeof(aHeader), "RED %d  BLUE %d",
-               pInfo->m_aTeamScore[0] / pInfo->m_TeamScoreDivisor,
-               pInfo->m_aTeamScore[1] / pInfo->m_TeamScoreDivisor);
+    str_format(aHeader, sizeof(aHeader), "BLUE %d  RED %d",
+               pInfo->m_aTeamScore[TEAM_BLUE] / pInfo->m_TeamScoreDivisor,
+               pInfo->m_aTeamScore[TEAM_RED] / pInfo->m_TeamScoreDivisor);
   else
     str_copy(aHeader, "SCORES", sizeof(aHeader));
   Tw64RenderText(pDisp, BoxX + 8, BoxY + 4, aHeader, 255, 255, 255);
 
   int Row = 0;
   char aRows[176];
-  CRgb aColors[TW64_MAX_VIEWPORTS];
+  enum { TW64_MAX_SCORE_ROWS = 8 };
+  if (MaxRows > TW64_MAX_SCORE_ROWS)
+    MaxRows = TW64_MAX_SCORE_ROWS;
+  CRgb aColors[TW64_MAX_SCORE_ROWS];
   aRows[0] = 0;
-  /* Selection sort over at most four slots: no allocation, no recursion. In
+  /* Selection sort over the visible slots: no allocation, no recursion. In
    * team modes the primary key is the team, so teammates stay grouped. */
-  bool aUsed[TW64_MAX_VIEWPORTS] = {false, false, false, false};
-  for (int Rank = 0; Rank < pInfo->m_NumPlayers && Rank < TW64_MAX_VIEWPORTS;
-       ++Rank) {
+  bool aUsed[MAX_PLAYERS] = {};
+  for (int Rank = 0; Rank < pInfo->m_NumPlayers && Rank < MaxRows; ++Rank) {
     int Best = -1;
-    for (int i = 0; i < pInfo->m_NumPlayers && i < TW64_MAX_VIEWPORTS; ++i) {
+    for (int i = 0; i < pInfo->m_NumPlayers && i < MAX_PLAYERS; ++i) {
       if (aUsed[i] || !pGameServer->m_apPlayers[i])
         continue;
       if (Best < 0) {
@@ -1715,7 +1758,9 @@ void DrawScoreboardText(surface_t *pDisp, CGameContext *pGameServer,
         continue;
       }
       if (pInfo->m_Teamplay && s_aTeam[i] != s_aTeam[Best]) {
-        if (s_aTeam[i] < s_aTeam[Best])
+        const int OrderI = s_aTeam[i] == TEAM_BLUE ? 0 : 1;
+        const int OrderBest = s_aTeam[Best] == TEAM_BLUE ? 0 : 1;
+        if (OrderI < OrderBest)
           Best = i;
         continue;
       }
@@ -1729,9 +1774,12 @@ void DrawScoreboardText(surface_t *pDisp, CGameContext *pGameServer,
     if (pInfo->m_Teamplay && s_aTeam[Best] >= 0)
       Tw64TeamColor(s_aTeam[Best], s_aSlotInTeam[Best], &aColors[Row].m_R,
                     &aColors[Row].m_G, &aColors[Row].m_B);
-    else
-      Tw64PlayerColor(Best, &aColors[Row].m_R, &aColors[Row].m_G,
-                      &aColors[Row].m_B);
+    else {
+      const uint32_t Color = TeeColor(pInfo, Best);
+      aColors[Row].m_R = (uint8_t)(Color >> 24);
+      aColors[Row].m_G = (uint8_t)(Color >> 16);
+      aColors[Row].m_B = (uint8_t)(Color >> 8);
+    }
     char aLine[40];
     str_format(aLine, sizeof(aLine), "%s^%02X%-10s %3d", Row ? "\n" : "", Row,
                pInfo->m_apPlayerNames[Best],
@@ -1902,6 +1950,46 @@ void Tw64TeamColor(int Team, int SlotInTeam, uint8_t *pR, uint8_t *pG,
   *pB = Color.m_B;
 }
 
+void Tw64AvatarColor(int Avatar, uint8_t *pR, uint8_t *pG, uint8_t *pB) {
+  if (Avatar < 0 || Avatar >= TW64_NUM_AVATARS)
+    Avatar = TW64_AVATAR_CLASSIC;
+  const CRgb &Color = s_aAvatarColors[Avatar];
+  *pR = Color.m_R;
+  *pG = Color.m_G;
+  *pB = Color.m_B;
+}
+
+void Tw64RenderAvatar(int Avatar, int CenterX, int CenterY, int Size) {
+  if (Avatar < 0 || Avatar >= TW64_NUM_AVATARS || Size <= 0)
+    return;
+  const int Parts = SPR_TEE_FIRST + Avatar;
+  uint8_t R, G, B;
+  Tw64AvatarColor(Avatar, &R, &G, &B);
+  const int Foot = Size * 10 / 21;
+  const uint8_t Fr = (uint8_t)(R * 2 / 3);
+  const uint8_t Fg = (uint8_t)(G * 2 / 3);
+  const uint8_t Fb = (uint8_t)(B * 2 / 3);
+
+  BeginTexturedPhase(false);
+  rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+  rdpq_set_prim_color(RGBA32(Fr, Fg, Fb, 255));
+  DrawSubCentered(Parts, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW, TEE_FOOT_SH,
+                  CenterX - Size / 5, CenterY + Size / 3, Foot, Foot, false,
+                  false);
+  rdpq_set_prim_color(RGBA32(R, G, B, 255));
+  DrawSubCentered(Parts, TEE_BODY_SX, TEE_BODY_SY, TEE_BODY_SW, TEE_BODY_SH,
+                  CenterX, CenterY, Size, Size, false, false);
+  rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+  DrawSubCentered(Parts, TEE_EYES_SX, TEE_EYES_SY, TEE_EYES_SW, TEE_EYES_SH,
+                  CenterX + Size / 9, CenterY - Size / 12, Size * 3 / 5,
+                  Size * 3 / 10, false, false);
+  rdpq_set_prim_color(RGBA32(Fr, Fg, Fb, 255));
+  DrawSubCentered(Parts, TEE_FOOT_SX, TEE_FOOT_SY, TEE_FOOT_SW, TEE_FOOT_SH,
+                  CenterX + Size / 5, CenterY + Size / 3, Foot, Foot, false,
+                  false);
+  rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+}
+
 /* Ends a page and schedules the flip on RDP completion instead of draining the
  * RDP on the CPU. Every page draws its text through the RDP font, so nothing
  * needs the framebuffer back. */
@@ -1925,16 +2013,22 @@ void Tw64RenderShade(int X, int Y, int W, int H, uint8_t R, uint8_t G,
   s_BoundPalette = -1;
 }
 
-void Tw64RenderMapPreview(int MapIndex, int X, int Y) {
-  if (MapIndex < 0 || MapIndex >= NUM_MAP_PREVIEWS)
+void Tw64RenderBeginMapPage(surface_t *pDisp, int MapIndex) {
+  rdpq_attach(pDisp, NULL);
+  SetClip(0, 0, TW64_SCREEN_W, TW64_SCREEN_H);
+  rdpq_set_scissor(0, 0, TW64_SCREEN_W, TW64_SCREEN_H);
+  if (MapIndex < 0 || MapIndex >= NUM_MAP_PREVIEWS) {
+    rdpq_set_mode_fill(RGBA32(6, 10, 20, 0xff));
+    rdpq_fill_rectangle(0, 0, TW64_SCREEN_W, TW64_SCREEN_H);
     return;
+  }
   /* Each map owns its CI8 palette. rdpq_sprite_blit uploads and activates that
-   * palette, then slices the 128x96 image through TMEM just like the larger
-   * menu backdrop sprites. The preview is stored at its screen size, so this
-   * path performs no filtering or rescaling on target. */
+   * palette, then slices the 160x120 source through TMEM. Its exact 2x scale
+   * fills the display without making sixteen 320x240 frames resident. */
   BeginTexturedPhase(false);
   rdpq_mode_dithering(DITHER_SQUARE_NONE);
-  DrawUiSprite(SPR_MAP_PREVIEW_FIRST + MapIndex, X, Y, 128, 96);
+  DrawUiSprite(SPR_MAP_PREVIEW_FIRST + MapIndex, 0, 0, TW64_SCREEN_W,
+               TW64_SCREEN_H);
 }
 
 void Tw64RenderBeginMenuPage(surface_t *pDisp, int Frame, bool ShowLogo) {
@@ -2128,11 +2222,11 @@ void Tw64RenderMatch(surface_t *pDisp, CGameContext *pGameServer,
   Fill(TW64_SCREEN_W / 2 - StripHalfWidth, 0,
        TW64_SCREEN_W / 2 + StripHalfWidth, 11, COLOR_HUD_BACK);
   if (pInfo->m_FlagMode) {
-    DrawFlagPip(TW64_SCREEN_W / 2 - 62, 2, TEAM_RED);
-    DrawFlagPip(TW64_SCREEN_W / 2 + 54, 2, TEAM_BLUE);
+    DrawFlagPip(TW64_SCREEN_W / 2 - 62, 2, TEAM_BLUE);
+    DrawFlagPip(TW64_SCREEN_W / 2 + 54, 2, TEAM_RED);
   }
   if (pInfo->m_ShowScoreboard)
-    Fill(90, 60, 230, 132, COLOR_HUD_BACK);
+    Fill(90, 60, 230, 180, COLOR_HUD_BACK);
 
   BeginTexturedPhase(false);
   rdpq_mode_alphacompare(0);
@@ -2154,20 +2248,20 @@ void Tw64RenderMatch(surface_t *pDisp, CGameContext *pGameServer,
      * own team colour. */
     uint8_t R, G, B;
     str_format(aBuf, sizeof(aBuf), "%d",
-               pInfo->m_aTeamScore[TEAM_RED] / pInfo->m_TeamScoreDivisor);
-    Tw64TeamColor(TEAM_RED, 0, &R, &G, &B);
-    Tw64RenderTextCentered(pDisp, TW64_SCREEN_W / 2 - 42, 2, aBuf, R, G, B);
-    str_format(aBuf, sizeof(aBuf), "%d",
                pInfo->m_aTeamScore[TEAM_BLUE] / pInfo->m_TeamScoreDivisor);
     Tw64TeamColor(TEAM_BLUE, 0, &R, &G, &B);
+    Tw64RenderTextCentered(pDisp, TW64_SCREEN_W / 2 - 42, 2, aBuf, R, G, B);
+    str_format(aBuf, sizeof(aBuf), "%d",
+               pInfo->m_aTeamScore[TEAM_RED] / pInfo->m_TeamScoreDivisor);
+    Tw64TeamColor(TEAM_RED, 0, &R, &G, &B);
     Tw64RenderTextCentered(pDisp, TW64_SCREEN_W / 2 + 42, 2, aBuf, R, G, B);
   }
 
   if (pInfo->m_ScoreQuadrant)
     DrawScoreboardText(pDisp, pGameServer, pInfo, TW64_SCREEN_W / 2,
-                       TW64_SCREEN_H / 2);
+                       TW64_SCREEN_H / 2, 7);
   if (pInfo->m_ShowScoreboard)
-    DrawScoreboardText(pDisp, pGameServer, pInfo, 90, 60);
+    DrawScoreboardText(pDisp, pGameServer, pInfo, 90, 60, 8);
 
   /* Asynchronous: the RDP keeps drawing this frame while the CPU goes back to
    * the simulation, and the buffer flip is queued behind the RDP's own

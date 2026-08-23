@@ -47,6 +47,8 @@
 #include "tw_audio.h"
 #include "tw_game.h"
 #include "tw_input.h"
+#include "tw_lobby.h"
+#include "tw_menu.h"
 #include "tw_render.h"
 #include "tw_rumble.h"
 
@@ -83,9 +85,9 @@ enum {
   /* One short match per staged map; sixteen of them have to fit in one
    * capture. */
   TW64_MAPSOAK_TIME_LIMIT_TICKS = 15 * SERVER_TICK_SPEED,
+  TW64_BENCH_TIME_LIMIT_TICKS = 12 * SERVER_TICK_SPEED,
   TW64_AUTOPLAY_MENU_FRAMES = 30,
-  TW64_AUTOPLAY_END_FRAMES = 60,
-  TW64_MAX_LOCAL = TW64_MAX_VIEWPORTS
+  TW64_AUTOPLAY_END_FRAMES = 60
 };
 
 /* ------------------------------------------------------------------ */
@@ -125,25 +127,31 @@ const CTw64ModeInfo s_aModes[TW64_NUM_MODES] = {
 struct CTw64MapEntry {
   const char *m_pName;
   bool m_Flags; /* has ENTITY_FLAGSTAND_RED/BLUE, i.e. is playable as CTF */
-  /* Menu-only label for the tileset family the map is built from, plus a
-   * warning where the map also carries death tiles. Cosmetic: it is the
-   * human-readable form of the tileset scan in
-   * scripts/convert_n64_assets.py (scan_map_tilesets), and nothing but the
-   * map-select page reads it. */
+  /* Player-facing environment name. The internal map id stays in logs so the
+   * preview and this familiar visual description remain the selector. */
   const char *m_pTheme;
+  bool m_Hazards;
 };
 
 /* Every map staged into the ROM filesystem by n64/Makefile. The two lists
  * must stay in sync; a missing file is reported as GAME_FAIL reason=map. */
 const CTw64MapEntry s_aMaps[] = {
-    {"dm1", false, "GRASS"},           {"dm2", false, "GRASS"},
-    {"dm3", false, "WINTER"},          {"dm6", false, "DESERT + HAZARDS"},
-    {"dm7", false, "GRASS"},           {"dm8", false, "WINTER + HAZARDS"},
-    {"dm9", false, "JUNGLE"},          {"lms1", false, "GRASS"},
-    {"ctf1", true, "GRASS"},           {"ctf2", true, "WINTER"},
-    {"ctf3", true, "DESERT"},          {"ctf4", true, "JUNGLE"},
-    {"ctf5", true, "GRASS + HAZARDS"}, {"ctf6", true, "JUNGLE + HAZARDS"},
-    {"ctf7", true, "GRASS"},           {"ctf8", true, "JUNGLE"}};
+    {"dm1", false, "GRASSLANDS", false},
+    {"dm2", false, "GRASSLANDS", false},
+    {"dm3", false, "SNOWFIELDS", false},
+    {"dm6", false, "DESERT", true},
+    {"dm7", false, "GRASSLANDS", false},
+    {"dm8", false, "SNOWFIELDS", true},
+    {"dm9", false, "JUNGLE", false},
+    {"lms1", false, "GRASSLANDS", false},
+    {"ctf1", true, "GRASSLANDS", false},
+    {"ctf2", true, "SNOWFIELDS", false},
+    {"ctf3", true, "DESERT", false},
+    {"ctf4", true, "JUNGLE", false},
+    {"ctf5", true, "GRASSLANDS", true},
+    {"ctf6", true, "JUNGLE", true},
+    {"ctf7", true, "GRASSLANDS", false},
+    {"ctf8", true, "JUNGLE", false}};
 
 const int TW64_NUM_MAPS = (int)(sizeof(s_aMaps) / sizeof(s_aMaps[0]));
 static_assert(TW64_NUM_MAPS == 16,
@@ -178,6 +186,10 @@ const char *MapThemeAt(bool Flags, int Index) {
   return s_aMaps[MapCatalogIndex(Flags, Index)].m_pTheme;
 }
 
+bool MapHasHazardsAt(bool Flags, int Index) {
+  return s_aMaps[MapCatalogIndex(Flags, Index)].m_Hazards;
+}
+
 int MapIndex(bool Flags, const char *pName) {
   int Index = 0;
   for (int i = 0; i < TW64_NUM_MAPS; ++i) {
@@ -206,6 +218,10 @@ struct CTw64AutoplaySpec {
    * actually loads, and it re-exercises the map-reload path each time. */
   bool m_RotateMaps;
   int m_TimeLimitTicks;
+  bool m_FlexibleTeams; /* P1/P2 together against four bots. */
+  bool m_Benchmark;     /* Rotate actor count instead of maps. */
+  bool m_HumanVersusHuman;
+  bool m_MenuReview; /* Readable page dwell plus a short looping match. */
 };
 
 /* Indexed by g_Tw64AutoplayMode; entry 0 is the interactive ROM and unused. */
@@ -225,12 +241,24 @@ const CTw64AutoplaySpec g_aTw64AutoplaySpecs[TW64_NUM_AUTOPLAY_MODES] = {
     {TW64_MODE_LMS, 1, 2, "lms1", false, false, TW64_AUTOPLAY_TIME_LIMIT_TICKS},
     {TW64_MODE_LTS, 4, 2, "dm7", false, false, TW64_AUTOPLAY_TIME_LIMIT_TICKS},
     {TW64_MODE_CTF, 2, 2, "ctf1", false, false, TW64_LONG_TIME_LIMIT_TICKS},
-    {TW64_MODE_DM, 1, 0, "dm1", true, true, TW64_MAPSOAK_TIME_LIMIT_TICKS}};
+    {TW64_MODE_DM, 1, 0, "dm1", true, true, TW64_MAPSOAK_TIME_LIMIT_TICKS},
+    {TW64_MODE_TDM, 2, 1, "dm2", true, false,
+     TW64_AUTOPLAY_TIME_LIMIT_TICKS, true, false},
+    {TW64_MODE_DM, 1, 2, "dm1", true, false, TW64_BENCH_TIME_LIMIT_TICKS,
+     false, true},
+    {TW64_MODE_TDM, 2, 1, "dm2", false, false,
+     TW64_AUTOPLAY_TIME_LIMIT_TICKS, false, false, true},
+    {TW64_MODE_TDM, 2, 1, "dm2", true, false, TW64_BENCH_TIME_LIMIT_TICKS,
+     true, false, false, true}};
 
 const CTw64AutoplaySpec *AutoplaySpec() {
   if (g_Tw64AutoplayMode <= 0 || g_Tw64AutoplayMode >= TW64_NUM_AUTOPLAY_MODES)
     return 0;
   return &g_aTw64AutoplaySpecs[g_Tw64AutoplayMode];
+}
+
+int AutoplayMenuFrames(const CTw64AutoplaySpec *pSpec) {
+  return pSpec && pSpec->m_MenuReview ? 60 : TW64_AUTOPLAY_MENU_FRAMES;
 }
 
 /* ------------------------------------------------------------------ */
@@ -340,15 +368,19 @@ struct CMatchConfig {
   const char *m_pDriverPolicy; /* autoplay stand-in for a human, or 0 */
   char m_aLabel[24];           /* "ctf-4p-hard" */
   int m_TimeLimitTicks;
+  bool m_Benchmark;
+  CTw64ActorSlot m_aActors[TW64_MAX_MATCH_PLAYERS];
 };
 
 CMatchConfig g_Match;
-CTw64Viewport g_aViewports[TW64_MAX_LOCAL];
+CTw64Viewport g_aViewports[TW64_MAX_HUMANS];
 int g_NumViewports;
-CTw64HumanInput g_aHumanInput[TW64_MAX_LOCAL];
-IBot *g_apAutoDrivers[TW64_MAX_LOCAL];
-char g_aaPlayerNames[TW64_MAX_LOCAL][MAX_NAME_ARRAY_SIZE];
-const char *g_apPlayerNames[TW64_MAX_LOCAL];
+CTw64HumanInput g_aHumanInput[TW64_MAX_HUMANS];
+IBot *g_apAutoDrivers[TW64_MAX_MATCH_PLAYERS];
+char g_aaPlayerNames[TW64_MAX_MATCH_PLAYERS][MAX_NAME_ARRAY_SIZE];
+const char *g_apPlayerNames[TW64_MAX_MATCH_PLAYERS];
+int g_aPlayerAvatars[TW64_MAX_MATCH_PLAYERS];
+int g_aClientByPort[TW64_MAX_HUMANS];
 
 int g_MatchTick;
 bool g_MatchOver;
@@ -450,33 +482,16 @@ const char *DifficultyPolicy(int Mode, int Difficulty) {
   }
 }
 
-/* What the selected player count does to the screen. The pages with only three
- * or four entries would otherwise leave half the body empty, and this is the
- * one thing about a local-multiplayer console game a player actually wants to
- * know before confirming. */
-const char *ViewportNote(int Humans) {
-  switch (Humans) {
-  case 1:
-    return "ONE FULL-SCREEN VIEW";
-  case 2:
-    return "TWO HORIZONTAL HALF-SCREEN VIEWS";
-  case 3:
-    return "THREE VIEWS PLUS A LIVE SCOREBOARD";
-  default:
-    return "FOUR QUARTER-SCREEN VIEWS";
-  }
-}
-
-/* The ladder, in words. The policy name is already in the row's note column;
- * this says what the player is about to be up against. */
+/* The ladder in player language. Policy ids remain in diagnostic logs rather
+ * than being presented as something to learn. */
 const char *DifficultyNote(int Difficulty) {
   switch (Difficulty) {
   case 0:
-    return "FIGHTS BACK, BUT GIVES GROUND";
+    return "RELAXED AIM / ROOM TO LEARN";
   case 1:
-    return "TRAINED MID-LADDER OPPONENTS";
+    return "BALANCED AIM / STEADY PRESSURE";
   default:
-    return "THE PROMOTED CHAMPION POLICY";
+    return "FAST AIM / STRONG MOVEMENT";
   }
 }
 
@@ -645,8 +660,8 @@ bool BootEngine() {
   pConfig->m_SvTimelimit = 0;
   pConfig->m_SvInactiveKickTime = 0;
   pConfig->m_SvTeambalanceTime = 0;
-  pConfig->m_SvPlayerSlots = TW64_MAX_LOCAL;
-  pConfig->m_SvMaxClients = TW64_MAX_LOCAL;
+  pConfig->m_SvPlayerSlots = TW64_MAX_MATCH_PLAYERS;
+  pConfig->m_SvMaxClients = TW64_MAX_MATCH_PLAYERS;
   pConfig->m_Debug = 0;
 
   if (!LoadMap(s_aMaps[0].m_pName))
@@ -658,7 +673,7 @@ bool BootEngine() {
 }
 
 void ReleaseAutoDrivers() {
-  for (int i = 0; i < TW64_MAX_LOCAL; ++i) {
+  for (int i = 0; i < TW64_MAX_MATCH_PLAYERS; ++i) {
     delete g_apAutoDrivers[i];
     g_apAutoDrivers[i] = 0;
   }
@@ -711,55 +726,70 @@ bool StartMatch(const CMatchConfig &Config) {
   ++g_MatchCount;
   const uint64_t Seed = 0x5457363400000000ULL + (uint64_t)g_MatchCount;
 
+  int BotNumber = 0;
   for (int i = 0; i < Config.m_NumPlayers; ++i) {
-    if (i < Config.m_NumHumans)
-      str_format(g_aaPlayerNames[i], sizeof(g_aaPlayerNames[i]), "P%d", i + 1);
+    g_aPlayerAvatars[i] = Config.m_aActors[i].m_Avatar;
+    if (Config.m_aActors[i].m_Kind == TW64_ACTOR_HUMAN)
+      str_format(g_aaPlayerNames[i], sizeof(g_aaPlayerNames[i]), "P%d",
+                 Config.m_aActors[i].m_ControllerPort + 1);
     else
       str_format(g_aaPlayerNames[i], sizeof(g_aaPlayerNames[i]), "CPU%d",
-                 i - Config.m_NumHumans + 1);
+                 ++BotNumber);
     g_apPlayerNames[i] = g_aaPlayerNames[i];
     g_pServer->SetClientName(i, g_aaPlayerNames[i]);
     g_pServer->SetIngame(i, true);
   }
-  for (int i = Config.m_NumPlayers; i < TW64_MAX_LOCAL; ++i) {
+  for (int i = Config.m_NumPlayers; i < TW64_MAX_MATCH_PLAYERS; ++i) {
     g_apPlayerNames[i] = "";
+    g_aPlayerAvatars[i] = TW64_AVATAR_CLASSIC;
     g_pServer->SetIngame(i, false);
   }
 
-  /* Humans first, so client IDs 0..NumHumans-1 map onto controller ports.
-   * The connect order is also what assigns teams: IGameController's
-   * GetStartTeam() hands each new client the smaller team, so humans end up
-   * split red/blue/red/blue and the bots that fill the remaining slots keep
-   * the teams balanced. */
-  for (int i = 0; i < Config.m_NumHumans; ++i) {
-    Tw64InputReset(&g_aHumanInput[i]);
-    g_pGameServer->OnClientConnected(i, true, false);
-    if (!g_pGameServer->m_apPlayers[i]) {
-      debugf("TW64 GAME_FAIL reason=addhuman slot=%d\n", i);
-      return false;
-    }
-    g_pGameServer->m_apPlayers[i]->Respawn();
-    if (Config.m_pDriverPolicy) {
-      g_apAutoDrivers[i] = CreateBot(Config.m_pDriverPolicy);
-      if (!g_apAutoDrivers[i]) {
-        debugf("TW64 GAME_FAIL reason=autodriver policy=%s\n",
-               Config.m_pDriverPolicy);
+  for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port)
+    g_aClientByPort[Port] = -1;
+
+  /* Actor kind and side come from the immutable lobby roster. Connection
+   * order no longer decides a team: DoTeamChange updates the controller's
+   * authoritative team-size bookkeeping before the first spawn. */
+  for (int i = 0; i < Config.m_NumPlayers; ++i) {
+    const CTw64ActorSlot &Actor = Config.m_aActors[i];
+    if (Actor.m_Kind == TW64_ACTOR_HUMAN) {
+      const int Port = Actor.m_ControllerPort;
+      Tw64InputReset(&g_aHumanInput[Port]);
+      g_aClientByPort[Port] = i;
+      g_pGameServer->OnClientConnected(i, true, false);
+      if (!g_pGameServer->m_apPlayers[i]) {
+        debugf("TW64 GAME_FAIL reason=addhuman slot=%d port=%d\n", i, Port);
         return false;
       }
-      g_apAutoDrivers[i]->Reset(Seed ^ 0x9e3779b97f4a7c15ULL, i);
-    }
-  }
-
-  for (int i = Config.m_NumHumans; i < Config.m_NumPlayers; ++i) {
-    if (!g_pGameServer->AddBot(i, Config.m_pBotPolicy, Seed)) {
+      if (Config.m_pDriverPolicy) {
+        g_apAutoDrivers[i] = CreateBot(Config.m_pDriverPolicy);
+        if (!g_apAutoDrivers[i]) {
+          debugf("TW64 GAME_FAIL reason=autodriver policy=%s\n",
+                 Config.m_pDriverPolicy);
+          return false;
+        }
+        g_apAutoDrivers[i]->Reset(Seed ^ 0x9e3779b97f4a7c15ULL, i);
+      }
+    } else if (!g_pGameServer->AddBot(i, Config.m_pBotPolicy, Seed)) {
       debugf("TW64 GAME_FAIL reason=addbot slot=%d policy=%s\n", i,
              Config.m_pBotPolicy);
       return false;
     }
+
+    CPlayer *pPlayer = g_pGameServer->m_apPlayers[i];
+    if (!pPlayer) {
+      debugf("TW64 GAME_FAIL reason=missingplayer slot=%d\n", i);
+      return false;
+    }
+    if (s_aModes[Config.m_Mode].m_Teams &&
+        pPlayer->GetTeam() != Actor.m_Team)
+      g_pGameServer->m_pController->DoTeamChange(pPlayer, Actor.m_Team, false);
+    pPlayer->Respawn();
   }
 
   Tw64AudioResetMatch(g_pGameServer);
-  Tw64RumbleResetMatch(g_pGameServer, Config.m_NumHumans,
+  Tw64RumbleResetMatch(g_pGameServer, g_aClientByPort, TW64_MAX_HUMANS,
                        s_aModes[Config.m_Mode].m_Flags,
                        g_Tw64AutoplayMode == 0);
 
@@ -782,10 +812,17 @@ bool StartMatch(const CMatchConfig &Config) {
 /* Viewports                                                          */
 /* ------------------------------------------------------------------ */
 
-void BuildViewports(int NumHumans) {
-  g_NumViewports = NumHumans < 1 ? 1 : NumHumans;
-  if (g_NumViewports > TW64_MAX_LOCAL)
-    g_NumViewports = TW64_MAX_LOCAL;
+void BuildViewports(const CMatchConfig &Config) {
+  g_NumViewports = 0;
+  for (int i = 0; i < Config.m_NumPlayers; ++i) {
+    if (Config.m_aActors[i].m_Kind != TW64_ACTOR_HUMAN)
+      continue;
+    g_aViewports[g_NumViewports].m_ClientID = i;
+    if (++g_NumViewports >= TW64_MAX_HUMANS)
+      break;
+  }
+  if (g_NumViewports < 1)
+    g_NumViewports = 1;
 
   if (g_NumViewports == 1) {
     g_aViewports[0].m_X0 = 0;
@@ -809,8 +846,6 @@ void BuildViewports(int NumHumans) {
       g_aViewports[i].m_Y1 = (Row + 1) * (TW64_SCREEN_H / 2);
     }
   }
-  for (int i = 0; i < g_NumViewports; ++i)
-    g_aViewports[i].m_ClientID = i;
 }
 
 /* ------------------------------------------------------------------ */
@@ -818,7 +853,10 @@ void BuildViewports(int NumHumans) {
 /* ------------------------------------------------------------------ */
 
 void ApplyLocalInputs() {
-  for (int i = 0; i < g_Match.m_NumHumans; ++i) {
+  for (int i = 0; i < g_Match.m_NumPlayers; ++i) {
+    const CTw64ActorSlot &Actor = g_Match.m_aActors[i];
+    if (Actor.m_Kind != TW64_ACTOR_HUMAN)
+      continue;
     CPlayer *pPlayer = g_pGameServer->m_apPlayers[i];
     if (!pPlayer)
       continue;
@@ -835,9 +873,10 @@ void ApplyLocalInputs() {
       BuildBotWorldState(g_pGameServer, i, &World);
       g_pGameServer->m_apBots[i] = 0;
       g_apAutoDrivers[i]->Tick(World, &Input);
-      Tw64InputAdoptCounters(&g_aHumanInput[i], &Input);
+      Tw64InputAdoptCounters(&g_aHumanInput[Actor.m_ControllerPort], &Input);
     } else {
-      Tw64InputPoll(&g_aHumanInput[i], i, &Input);
+      Tw64InputPoll(&g_aHumanInput[Actor.m_ControllerPort],
+                    Actor.m_ControllerPort, &Input);
     }
 
     pPlayer->OnPredictedInput(&Input);
@@ -856,11 +895,14 @@ void EmitStat() {
   Tw64AudioTakeWindow(&Audio);
   CTw64RumbleStats Rumble;
   Tw64RumbleTakeWindow(&Rumble);
-  debugf("TW64 GAME_STAT tick=%d sim_avg_us=%lu sim_max_us=%lu "
+  debugf("TW64 GAME_STAT tick=%d players=%d humans=%d bots=%d views=%d "
+         "window_ticks=%lu sim_avg_us=%lu sim_max_us=%lu "
          "render_avg_us=%lu render_max_us=%lu dropped_frames=%lu frames=%lu "
          "audio_mix_avg_us=%lu audio_mix_max_us=%lu audio_tick_avg_us=%lu "
          "audio_tick_max_us=%lu voices=%lu\n",
-         g_MatchTick, (unsigned long)SimAvg,
+         g_MatchTick, g_Match.m_NumPlayers, g_Match.m_NumHumans,
+         g_Match.m_NumPlayers - g_Match.m_NumHumans, g_NumViewports,
+         (unsigned long)g_SimWindowTicks, (unsigned long)SimAvg,
          (unsigned long)CyclesToUs(g_SimWindowMaxCycles),
          (unsigned long)RenderAvg,
          (unsigned long)CyclesToUs(g_RenderWindowMaxCycles),
@@ -868,6 +910,23 @@ void EmitStat() {
          (unsigned long)Audio.m_MixAvgUs, (unsigned long)Audio.m_MixMaxUs,
          (unsigned long)Audio.m_TickAvgUs, (unsigned long)Audio.m_TickMaxUs,
          (unsigned long)Audio.m_Voices);
+  if (g_Match.m_Benchmark && g_SimWindowTicks) {
+    const uint32_t FpsMilli =
+        (uint32_t)(((uint64_t)g_RenderWindowFrames * SERVER_TICK_SPEED *
+                    1000ULL) /
+                   g_SimWindowTicks);
+    debugf("TW64 BOT_BENCH actors=%d bots=%d fps_milli=%lu sim_avg_us=%lu "
+           "sim_max_us=%lu render_avg_us=%lu render_max_us=%lu "
+           "frames=%lu window_ticks=%lu dropped=%lu\n",
+           g_Match.m_NumPlayers,
+           g_Match.m_NumPlayers - g_Match.m_NumHumans,
+           (unsigned long)FpsMilli, (unsigned long)SimAvg,
+           (unsigned long)CyclesToUs(g_SimWindowMaxCycles),
+           (unsigned long)RenderAvg,
+           (unsigned long)CyclesToUs(g_RenderWindowMaxCycles),
+           (unsigned long)g_RenderWindowFrames,
+           (unsigned long)g_SimWindowTicks, (unsigned long)g_WindowDropped);
+  }
   debugf("TW64 RUMBLE_STAT tick=%d tick_avg_us=%lu tick_max_us=%lu "
          "update_avg_us=%lu update_max_us=%lu requests=%lu ignored=%lu "
          "transitions=%lu writes=%lu supported=0x%x active=0x%x\n",
@@ -976,11 +1035,12 @@ void EmitMatchEnd() {
   }
 
   TrackHeap();
-  debugf("TW64 MATCH_END mode=%s map=%s scores=%s teams=%d/%d raw_teams=%d/%d "
-         "flags=%s ticks=%d max_sim_us=%lu dropped_total=%lu heap_peak=%d\n",
+  debugf("TW64 MATCH_END mode=%s map=%s scores=%s blue=%d red=%d "
+         "raw_blue=%d raw_red=%d flags=%s ticks=%d max_sim_us=%lu "
+         "dropped_total=%lu heap_peak=%d\n",
          g_Match.m_aLabel, g_Match.m_pMap, aScores,
-         DisplayTeamScore(TEAM_RED), DisplayTeamScore(TEAM_BLUE),
-         TeamScore(TEAM_RED), TeamScore(TEAM_BLUE),
+         DisplayTeamScore(TEAM_BLUE), DisplayTeamScore(TEAM_RED),
+         TeamScore(TEAM_BLUE), TeamScore(TEAM_RED),
          aFlags[0] ? aFlags : "-", g_MatchTick,
          (unsigned long)CyclesToUs(g_MatchMaxSimCycles),
          (unsigned long)g_TotalDropped, g_HeapPeak - g_HeapBase);
@@ -990,12 +1050,15 @@ void EmitMatchEnd() {
   for (int i = 0; i < g_Match.m_NumPlayers; ++i) {
     CPlayer *pPlayer = g_pGameServer->m_apPlayers[i];
     const CGameContext::CPlayerStats &Stats = g_pGameServer->m_aPlayerStats[i];
-    debugf("TW64 MATCH_PLAYER slot=%d name=%s kind=%s team=%d score=%d kills=%d "
-           "deaths=%d grabs=%d captures=%d returns=%d carrier_ticks=%d\n",
+    debugf("TW64 MATCH_PLAYER slot=%d name=%s kind=%s team=%d avatar=%s "
+           "score=%d kills=%d deaths=%d grabs=%d captures=%d returns=%d "
+           "carrier_ticks=%d\n",
            i, g_apPlayerNames[i],
-           i < g_Match.m_NumHumans ? "human" : "bot",
-           pPlayer ? pPlayer->GetTeam() : -1, pPlayer ? pPlayer->m_Score : 0,
-           Stats.m_Kills, Stats.m_Deaths, Stats.m_FlagGrabs,
+           g_Match.m_aActors[i].m_Kind == TW64_ACTOR_HUMAN ? "human" : "bot",
+           pPlayer ? pPlayer->GetTeam() : -1,
+           Tw64AvatarName(g_Match.m_aActors[i].m_Avatar),
+           pPlayer ? pPlayer->m_Score : 0, Stats.m_Kills, Stats.m_Deaths,
+           Stats.m_FlagGrabs,
            Stats.m_FlagCaptures, Stats.m_FlagReturns, Stats.m_FlagCarrierTicks);
   }
 }
@@ -1009,6 +1072,7 @@ void FillRenderInfo(CTw64RenderInfo *pInfo, bool ShowScoreboard) {
   pInfo->m_NumViewports = g_NumViewports;
   pInfo->m_NumPlayers = g_Match.m_NumPlayers;
   pInfo->m_apPlayerNames = g_apPlayerNames;
+  pInfo->m_pPlayerAvatars = g_aPlayerAvatars;
   pInfo->m_ShowScoreboard = ShowScoreboard;
   pInfo->m_ScoreQuadrant = g_NumViewports == 3;
   const int TicksLeft = g_Match.m_TimeLimitTicks - g_MatchTick;
@@ -1042,11 +1106,10 @@ void RenderMatchFrame(bool ShowScoreboard) {
 /* Page furniture                                                     */
 /* ------------------------------------------------------------------ */
 
-/* The menu, the loading pages and the end screen share one layout so the shell
- * looks like one product rather than four screens: the logo and the animated
- * sky backdrop on top, a heading row with a rule under it, a body of rows, and
- * a footer strip carrying the wordmark, the page's own controls and the pad
- * count. Only the body changes between pages. */
+/* Most configuration pages, loading pages and the end screen share this shell:
+ * logo or headline, animated backdrop, heading and footer. The visual level
+ * browser deliberately breaks out of the row template so the preview can own
+ * the whole frame; its edge overlays reuse the same typography and colours. */
 enum {
   TW64_PAGE_HEAD_Y = 70,   /* heading / breadcrumb row, cap top */
   TW64_PAGE_RULE_Y = 84,   /* the rule under the heading */
@@ -1062,6 +1125,8 @@ int g_PageFrame;
 
 void DrawPageChrome(surface_t *pDisp, const char *pHeading, const char *pCrumb,
                     const char *pControls, int Pads) {
+  (void)pDisp;
+  (void)Pads;
   if (pHeading)
     Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, TW64_PAGE_HEAD_Y,
                     pHeading, 130, 185, 240, TW64_ALIGN_LEFT);
@@ -1075,19 +1140,9 @@ void DrawPageChrome(surface_t *pDisp, const char *pHeading, const char *pCrumb,
   Tw64RenderShade(0, TW64_PAGE_FOOT_Y, TW64_SCREEN_W,
                   TW64_SCREEN_H - TW64_PAGE_FOOT_Y, 5, 8, 16, 216);
   Tw64RenderShade(0, TW64_PAGE_FOOT_Y, TW64_SCREEN_W, 1, 52, 76, 120, 255);
-  Tw64RenderTextF(TW64_FONT_SMALL, 8, TW64_PAGE_FOOT_TEXT, "TEEWORLDS 64", 255,
-                  208, 80, TW64_ALIGN_LEFT);
   if (pControls)
     Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W / 2, TW64_PAGE_FOOT_TEXT,
-                    pControls, 150, 168, 205, TW64_ALIGN_CENTER);
-  char aBuf[32];
-  if (g_Tw64AutoplayMode)
-    str_copy(aBuf, "AUTOPLAY", sizeof(aBuf));
-  else
-    str_format(aBuf, sizeof(aBuf), "PADS %d  RUM %d", Pads,
-               Tw64RumbleSupportedCount());
-  Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W - 8, TW64_PAGE_FOOT_TEXT,
-                  aBuf, 130, 146, 180, TW64_ALIGN_RIGHT);
+                    pControls, 205, 215, 235, TW64_ALIGN_CENTER);
 }
 
 /* Boot, load and failure notices. Same backdrop and typography as the menu, so
@@ -1120,26 +1175,13 @@ void DrawSimplePage(const char *pTitle, const char *pLine1,
 /* ------------------------------------------------------------------ */
 
 enum {
-  TW64_PAGE_MODE = 0,
-  TW64_PAGE_PLAYERS,
-  TW64_PAGE_DIFFICULTY,
-  TW64_PAGE_MAP,
-  TW64_NUM_PAGES,
   TW64_MENU_MAX_ROWS = 8,
-  /* Eight rows of fifteen pixels sit between the rule under the heading and
-   * the footer strip, which is what the longest page (the eight-map list)
-   * needs; the shorter pages spend the difference on the control map. */
+  /* Fixed scratch capacity for row-based pages. The level catalog is browsed
+   * one full-screen image at a time and is not constrained by this count. */
   TW64_MENU_ROW_Y = 88,
   TW64_MENU_ROW_STEP = 15,
   TW64_MENU_LABEL_X = 42,
-  TW64_MENU_NOTE_X = 286,
-  /* The map page keeps the eight-row list but gives its notes column to a
-   * selected-map scene. The preview is stored at this exact screen size. */
-  TW64_MAP_LIST_W = 112,
-  TW64_MAP_PREVIEW_X = 156,
-  TW64_MAP_PREVIEW_Y = 94,
-  TW64_MAP_PREVIEW_W = 128,
-  TW64_MAP_PREVIEW_H = 96
+  TW64_MENU_NOTE_X = 286
 };
 
 struct CMenuRow {
@@ -1167,6 +1209,7 @@ void AddMenuRow(const char *pText, const char *pNote, uint8_t R, uint8_t G,
 
 /* Menu selections. Kept across pages so B returns to a page as it was left. */
 int g_aMenuSelection[TW64_NUM_PAGES];
+CTw64Lobby g_MenuLobby;
 
 int MenuMode() { return g_aMenuSelection[TW64_PAGE_MODE]; }
 bool MenuWantsFlagMaps() { return s_aModes[MenuMode()].m_Flags; }
@@ -1175,24 +1218,23 @@ int MenuEntryCount(int Page) {
   switch (Page) {
   case TW64_PAGE_MODE:
     return TW64_NUM_MODES;
-  case TW64_PAGE_PLAYERS:
-    return TW64_MAX_LOCAL;
+  case TW64_PAGE_LOBBY:
+  case TW64_PAGE_AVATAR:
+    return 0;
+  case TW64_PAGE_BOTS:
+    return s_aModes[MenuMode()].m_Teams ? 2 : 1;
   case TW64_PAGE_DIFFICULTY:
     return 3;
-  default: {
-    /* Both filtered map lists are exactly TW64_MENU_MAX_ROWS long today. The
-     * clamp keeps the page honest if a future map pushes one list past what
-     * a single screen of rows can show, rather than offering an entry the
-     * player cannot see. */
-    const int Count = MapCount(MenuWantsFlagMaps());
-    return Count > TW64_MENU_MAX_ROWS ? (int)TW64_MENU_MAX_ROWS : Count;
+  case TW64_PAGE_MAP: {
+    return MapCount(MenuWantsFlagMaps());
   }
+  default:
+    return 0;
   }
 }
 
-/* The accent a selected row is drawn in. Gold is the wordmark's own colour and
- * is what the mode, player-count and map pages use; the difficulty page
- * overrides it with its own green/amber/red ladder. */
+/* The accent a selected row is drawn in. Gold is the wordmark's own colour;
+ * the difficulty page overrides it with its green/amber/red ladder. */
 enum { TW64_ACCENT_R = 255, TW64_ACCENT_G = 214, TW64_ACCENT_B = 110 };
 
 void BuildMenuRows(int Page) {
@@ -1200,74 +1242,52 @@ void BuildMenuRows(int Page) {
   char aBuf[24];
   switch (Page) {
   case TW64_PAGE_MODE:
-    for (int i = 0; i < TW64_NUM_MODES; ++i) {
-      char aNote[20];
-      UpperCopy(aNote, sizeof(aNote), s_aModes[i].m_pId);
-      AddMenuRow(s_aModes[i].m_pLabel, aNote, TW64_ACCENT_R, TW64_ACCENT_G,
+    for (int i = 0; i < TW64_NUM_MODES; ++i)
+      AddMenuRow(s_aModes[i].m_pLabel, 0, TW64_ACCENT_R, TW64_ACCENT_G,
                  TW64_ACCENT_B);
-    }
     break;
-  case TW64_PAGE_PLAYERS:
-    for (int i = 1; i <= TW64_MAX_LOCAL; ++i) {
-      str_format(aBuf, sizeof(aBuf), "%d PLAYER%s", i, i > 1 ? "S" : "");
-      char aNote[20];
-      str_format(aNote, sizeof(aNote), "%d BOT%s", TW64_MAX_LOCAL - i,
-                 TW64_MAX_LOCAL - i == 1 ? "" : "S");
-      AddMenuRow(aBuf, aNote, TW64_ACCENT_R, TW64_ACCENT_G, TW64_ACCENT_B);
+  case TW64_PAGE_LOBBY:
+  case TW64_PAGE_AVATAR:
+    break;
+  case TW64_PAGE_BOTS:
+    if (s_aModes[MenuMode()].m_Teams) {
+      str_format(aBuf, sizeof(aBuf), "<  %d  >",
+                 g_MenuLobby.m_aBots[TW64_TEAM_BLUE]);
+      AddMenuRow("BLUE TEAM BOTS", aBuf, 135, 175, 255);
+      str_format(aBuf, sizeof(aBuf), "<  %d  >",
+                 g_MenuLobby.m_aBots[TW64_TEAM_RED]);
+      AddMenuRow("RED TEAM BOTS", aBuf, 255, 145, 135);
+    } else {
+      str_format(aBuf, sizeof(aBuf), "<  %d  >",
+                 g_MenuLobby.m_aBots[TW64_TEAM_RED]);
+      AddMenuRow("OPPONENT BOTS", aBuf, TW64_ACCENT_R, TW64_ACCENT_G,
+                 TW64_ACCENT_B);
     }
     break;
   case TW64_PAGE_DIFFICULTY:
-    AddMenuRow("EASY", DifficultyPolicy(MenuMode(), 0), 130, 240, 140);
-    AddMenuRow("MEDIUM", DifficultyPolicy(MenuMode(), 1), 250, 220, 100);
-    AddMenuRow("HARD", DifficultyPolicy(MenuMode(), 2), 255, 110, 110);
+    AddMenuRow("EASY", 0, 130, 240, 140);
+    AddMenuRow("MEDIUM", 0, 250, 220, 100);
+    AddMenuRow("HARD", 0, 255, 110, 110);
     break;
-  default: {
-    const bool Flags = MenuWantsFlagMaps();
-    const int Count = MapCount(Flags);
-    for (int i = 0; i < Count && i < TW64_MENU_MAX_ROWS; ++i) {
-      /* Uppercase, so the map list reads in the same voice as the mode and
-       * player-count pages. */
-      UpperCopy(aBuf, sizeof(aBuf), MapAt(Flags, i));
-      AddMenuRow(aBuf, MapThemeAt(Flags, i), TW64_ACCENT_R, TW64_ACCENT_G,
-                 TW64_ACCENT_B);
-    }
+  default:
     break;
-  }
   }
 }
 
 const char *PageTitle(int Page) {
   switch (Page) {
   case TW64_PAGE_MODE:
-    return "SELECT MODE";
-  case TW64_PAGE_PLAYERS:
-    return "LOCAL PLAYERS";
+    return "CHOOSE GAME";
+  case TW64_PAGE_LOBBY:
+    return "PLAYERS";
+  case TW64_PAGE_AVATAR:
+    return "CHOOSE YOUR TEE";
+  case TW64_PAGE_BOTS:
+    return "ADD BOTS";
   case TW64_PAGE_DIFFICULTY:
-    return "DIFFICULTY";
+    return "BOT SKILL";
   default:
-    return "SELECT MAP";
-  }
-}
-
-/* The control map, in two columns under the mode list. It is reference
- * material, not a menu entry, so it stays in the small face and a muted
- * colour: present on the first page a player sees, never competing with the
- * list itself. */
-void DrawControlsBlock(int Y) {
-  static const char *const s_apLeft[4] = {"STICK   AIM + MOVE",
-                                          "DPAD    MOVE LEFT/RIGHT",
-                                          "START   SCOREBOARD", 0};
-  static const char *const s_apRight[4] = {"A   JUMP", "B   FIRE", "Z   HOOK",
-                                           "R   WEAPON"};
-  Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, Y, "CONTROLS", 130, 185,
-                  240, TW64_ALIGN_LEFT);
-  for (int i = 0; i < 4; ++i) {
-    const int LineY = Y + 12 + i * 10;
-    if (s_apLeft[i])
-      Tw64RenderTextF(TW64_FONT_SMALL, TW64_MENU_LABEL_X, LineY, s_apLeft[i],
-                      150, 168, 205, TW64_ALIGN_LEFT);
-    Tw64RenderTextF(TW64_FONT_SMALL, 186, LineY, s_apRight[i], 150, 168, 205,
-                    TW64_ALIGN_LEFT);
+    return "CHOOSE LEVEL";
   }
 }
 
@@ -1283,37 +1303,29 @@ void DrawMenuFrame(int Page, int Selection, int Pads) {
 
   /* Breadcrumb: what the pages before this one already decided. */
   char aCrumb[64];
-  char aMode[24];
-  UpperCopy(aMode, sizeof(aMode), s_aModes[MenuMode()].m_pId);
+  const CTw64ModeInfo &Mode = s_aModes[MenuMode()];
+  const char *pCrumb = aCrumb;
   if (Page == TW64_PAGE_MODE)
-    str_copy(aCrumb, "5 MODES / 16 MAPS", sizeof(aCrumb));
-  else if (Page == TW64_PAGE_PLAYERS)
-    str_format(aCrumb, sizeof(aCrumb), "%s / %s", aMode,
-               s_aModes[MenuMode()].m_pRule);
-  else if (Page == TW64_PAGE_DIFFICULTY)
-    str_format(aCrumb, sizeof(aCrumb), "%s / %d PLAYER%s", aMode,
-               g_aMenuSelection[TW64_PAGE_PLAYERS] + 1,
-               g_aMenuSelection[TW64_PAGE_PLAYERS] ? "S" : "");
-  else {
-    char aDifficulty[16];
-    UpperCopy(aDifficulty, sizeof(aDifficulty),
-              DifficultyName(g_aMenuSelection[TW64_PAGE_DIFFICULTY]));
-    str_format(aCrumb, sizeof(aCrumb), "%s / %dP / %s", aMode,
-               g_aMenuSelection[TW64_PAGE_PLAYERS] + 1, aDifficulty);
-  }
+    pCrumb = 0;
+  else if (Page == TW64_PAGE_AVATAR || Page == TW64_PAGE_BOTS)
+    str_format(aCrumb, sizeof(aCrumb), "%s / %d HUMAN%s", Mode.m_pLabel,
+               Tw64LobbyHumanCount(&g_MenuLobby),
+               Tw64LobbyHumanCount(&g_MenuLobby) == 1 ? "" : "S");
+  else
+    str_format(aCrumb, sizeof(aCrumb), "%s / %d BOT%s", Mode.m_pLabel,
+               Tw64LobbyBotCount(&g_MenuLobby),
+               Tw64LobbyBotCount(&g_MenuLobby) == 1 ? "" : "S");
 
-  const char *pControls = Page == TW64_PAGE_MODE ? "A  CONFIRM"
-                          : Page == TW64_PAGE_MAP
-                              ? "A  START      B  BACK"
-                              : "A  CONFIRM      B  BACK";
-  DrawPageChrome(pDisp, PageTitle(Page), aCrumb, pControls, Pads);
+  const char *pControls = Page == TW64_PAGE_MODE ? "A CHOOSE"
+                          : Page == TW64_PAGE_BOTS
+                              ? "</> CHANGE    A NEXT    B BACK"
+                              : "A NEXT    B BACK";
+  DrawPageChrome(pDisp, PageTitle(Page), pCrumb, pControls, Pads);
 
   /* The selected row gets both a highlight band and a gold marker down its
    * left edge: colour alone is easy to lose on a composite signal. */
   const int SelY = TW64_MENU_ROW_Y + Selection * TW64_MENU_ROW_STEP;
-  const int SelW =
-      Page == TW64_PAGE_MAP ? (int)TW64_MAP_LIST_W : (int)TW64_PAGE_BODY_W;
-  Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, SelW,
+  Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, TW64_PAGE_BODY_W,
                   TW64_MENU_ROW_STEP, 34, 62, 116, 205);
   Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, 3, TW64_MENU_ROW_STEP, 255, 208,
                   80, 255);
@@ -1331,53 +1343,288 @@ void DrawMenuFrame(int Page, int Selection, int Pads) {
     else
       Tw64RenderTextF(TW64_FONT_MENU, TW64_MENU_LABEL_X, Y, Row.m_aText, 205,
                       215, 235, TW64_ALIGN_LEFT);
-    if (Page != TW64_PAGE_MAP && Row.m_aNote[0])
-      Tw64RenderTextF(TW64_FONT_SMALL, TW64_MENU_NOTE_X, Y + 2, Row.m_aNote,
-                      Active ? 190 : 122, Active ? 205 : 140,
-                      Active ? 230 : 172, TW64_ALIGN_RIGHT);
+    if (Row.m_aNote[0])
+      Tw64RenderTextF(Page == TW64_PAGE_BOTS ? TW64_FONT_MENU
+                                             : TW64_FONT_SMALL,
+                      TW64_MENU_NOTE_X,
+                      Page == TW64_PAGE_BOTS ? Y : Y + 2, Row.m_aNote,
+                      Active ? Row.m_R : 122, Active ? Row.m_G : 140,
+                      Active ? Row.m_B : 172, TW64_ALIGN_RIGHT);
   }
 
-  /* Detail block: the mode page carries the control map, the two short pages
-   * explain their choice, and the map page turns the old notes column into a
-   * scene window. The explanatory two-line blocks remain bottom-anchored. */
-  const int DetailY = 186;
+  /* Short, player-facing consequences use the remaining area. Diagnostic
+   * identifiers and measured limits belong in logs and reports, not here. */
   if (Page == TW64_PAGE_MODE) {
-    DrawControlsBlock(TW64_MENU_ROW_Y + g_NumMenuRows * TW64_MENU_ROW_STEP + 2);
-  } else if (Page == TW64_PAGE_PLAYERS) {
-    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, DetailY,
-                    ViewportNote(Selection + 1), 130, 185, 240,
+    Tw64RenderTextF(TW64_FONT_MENU, TW64_PAGE_BODY_X, 171, Mode.m_pRule, 130,
+                    185, 240, TW64_ALIGN_LEFT);
+    char aModel[48];
+    str_format(aModel, sizeof(aModel), "%s / %s",
+               Mode.m_Teams ? "TWO TEAMS" : "EVERY PLAYER FOR THEMSELVES",
+               Mode.m_Survival ? "ONE LIFE ROUNDS" : "RESPAWN");
+    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, 189, aModel, 150, 168,
+                    205, TW64_ALIGN_LEFT);
+  } else if (Page == TW64_PAGE_BOTS) {
+    const int Validity = Tw64LobbyValidate(
+        &g_MenuLobby, s_aModes[MenuMode()].m_Teams,
+        AutoplaySpec() && AutoplaySpec()->m_Benchmark
+            ? TW64_MAX_MATCH_PLAYERS
+            : TW64_MAX_INTERACTIVE_PLAYERS);
+    const char *pStatus = "READY TO PLAY";
+    if (Validity == TW64_LOBBY_NEEDS_OPPONENT)
+      pStatus = "ADD AN OPPONENT";
+    else if (Validity == TW64_LOBBY_NEEDS_RED)
+      pStatus = "RED NEEDS A HUMAN OR BOT";
+    else if (Validity == TW64_LOBBY_NEEDS_BLUE)
+      pStatus = "BLUE NEEDS A HUMAN OR BOT";
+    else if (Validity == TW64_LOBBY_TOO_MANY_PLAYERS)
+      pStatus = "TOO MANY PLAYERS";
+    Tw64RenderTextF(TW64_FONT_MENU, TW64_PAGE_BODY_X, 155,
+                    pStatus, Validity == TW64_LOBBY_VALID ? 130 : 255,
+                    Validity == TW64_LOBBY_VALID ? 185 : 150,
+                    Validity == TW64_LOBBY_VALID ? 240 : 120,
                     TW64_ALIGN_LEFT);
-    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, DetailY + 12,
-                    "THE REMAINING SLOTS ARE FILLED WITH BOTS", 150, 168, 205,
-                    TW64_ALIGN_LEFT);
+    char aRoster[64];
+    if (s_aModes[MenuMode()].m_Teams)
+      str_format(aRoster, sizeof(aRoster), "BLUE %d   RED %d   %d TOTAL",
+                 Tw64LobbyHumanTeamCount(&g_MenuLobby, TW64_TEAM_BLUE) +
+                     g_MenuLobby.m_aBots[TW64_TEAM_BLUE],
+                 Tw64LobbyHumanTeamCount(&g_MenuLobby, TW64_TEAM_RED) +
+                     g_MenuLobby.m_aBots[TW64_TEAM_RED],
+                 Tw64LobbyPlayerCount(&g_MenuLobby));
+    else
+      str_format(aRoster, sizeof(aRoster), "%d HUMANS   %d BOTS   %d TOTAL",
+                 Tw64LobbyHumanCount(&g_MenuLobby),
+                 Tw64LobbyBotCount(&g_MenuLobby),
+                 Tw64LobbyPlayerCount(&g_MenuLobby));
+    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, 181,
+                    aRoster, 150, 168, 205, TW64_ALIGN_LEFT);
   } else if (Page == TW64_PAGE_DIFFICULTY) {
-    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, DetailY,
+    Tw64RenderTextF(TW64_FONT_MENU, TW64_PAGE_BODY_X, 157,
                     DifficultyNote(Selection), 130, 185, 240, TW64_ALIGN_LEFT);
-    char aPolicy[48];
-    str_format(aPolicy, sizeof(aPolicy), "BOT POLICY  %s",
-               DifficultyPolicy(MenuMode(), Selection));
-    Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, DetailY + 12, aPolicy,
-                    150, 168, 205, TW64_ALIGN_LEFT);
-  } else if (Page == TW64_PAGE_MAP) {
-    /* One neutral pixel contains the colourful crop without competing with
-     * the gold selection marker or repeating the removed gameplay frames. */
-    Tw64RenderShade(TW64_MAP_PREVIEW_X - 1, TW64_MAP_PREVIEW_Y - 1,
-                    TW64_MAP_PREVIEW_W + 2, TW64_MAP_PREVIEW_H + 2, 18, 22, 30,
-                    255);
-    Tw64RenderMapPreview(
-        MapCatalogIndex(MenuWantsFlagMaps(), Selection), TW64_MAP_PREVIEW_X,
-        TW64_MAP_PREVIEW_Y);
-    Tw64RenderTextF(TW64_FONT_SMALL,
-                    TW64_MAP_PREVIEW_X + TW64_MAP_PREVIEW_W / 2,
-                    TW64_MAP_PREVIEW_Y + TW64_MAP_PREVIEW_H + 8,
-                    g_aMenuRows[Selection].m_aNote, 150, 168, 205,
-                    TW64_ALIGN_CENTER);
   }
   Tw64RenderEndPage();
 }
 
+/* The level is the decision. Its image owns the frame; only its recognizable
+ * name, hazards and the chosen setup remain on the edge overlays. */
+void DrawMapFrame(int Selection, int /*Pads*/) {
+  Tw64AudioUpdate();
+  Tw64RumbleUpdate();
+  const bool Flags = MenuWantsFlagMaps();
+  const int Count = MapCount(Flags);
+  if (Selection >= Count)
+    Selection = Count ? Count - 1 : 0;
+
+  surface_t *pDisp = display_get();
+  Tw64RenderBeginMapPage(pDisp, MapCatalogIndex(Flags, Selection));
+  Tw64RenderShade(0, 0, TW64_SCREEN_W, 29, 5, 8, 16, 205);
+  Tw64RenderShade(0, 164, TW64_SCREEN_W, TW64_SCREEN_H - 164, 5, 8, 16, 220);
+
+  Tw64RenderTextF(TW64_FONT_SMALL, 12, 10, PageTitle(TW64_PAGE_MAP), 210, 225,
+                  245, TW64_ALIGN_LEFT);
+  char aBuf[64];
+  str_format(aBuf, sizeof(aBuf), "%d OF %d", Selection + 1, Count);
+  Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W - 12, 10, aBuf, 210, 225,
+                  245, TW64_ALIGN_RIGHT);
+
+  Tw64RenderTextF(TW64_FONT_MENU, 16, 176, MapThemeAt(Flags, Selection), 255,
+                  214, 110, TW64_ALIGN_LEFT);
+  if (MapHasHazardsAt(Flags, Selection))
+    Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W - 16, 179, "HAZARDS", 255,
+                    145, 105, TW64_ALIGN_RIGHT);
+
+  char aDifficulty[16];
+  if (Tw64LobbyBotCount(&g_MenuLobby) > 0)
+    UpperCopy(aDifficulty, sizeof(aDifficulty),
+              DifficultyName(g_aMenuSelection[TW64_PAGE_DIFFICULTY]));
+  else
+    str_copy(aDifficulty, "NO BOTS", sizeof(aDifficulty));
+  str_format(aBuf, sizeof(aBuf), "%s / %d PLAYERS / %s",
+             s_aModes[MenuMode()].m_pLabel,
+             Tw64LobbyPlayerCount(&g_MenuLobby), aDifficulty);
+  Tw64RenderTextF(TW64_FONT_SMALL, 16, 202, aBuf, 210, 220, 238,
+                  TW64_ALIGN_LEFT);
+  Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W / 2, 226,
+                  "</> BROWSE   A PLAY   B BACK", 235, 240, 250,
+                  TW64_ALIGN_CENTER);
+  Tw64RenderEndPage();
+}
+
+/* Shared character grid: every joined controller owns one cursor and locks in
+ * independently. Duplicate silhouettes are allowed, avoiding an arbitrary
+ * race between friends; team colour or the free-for-all palette still keeps
+ * two players with the same tee readable in the match. */
+void DrawAvatarFrame(int Pads) {
+  Tw64AudioUpdate();
+  Tw64RumbleUpdate();
+  surface_t *pDisp = display_get();
+  Tw64RenderBeginMenuPage(pDisp, g_PageFrame++, true);
+
+  char aCrumb[64];
+  str_format(aCrumb, sizeof(aCrumb), "%d PLAYER%s",
+             Tw64LobbyHumanCount(&g_MenuLobby),
+             Tw64LobbyHumanCount(&g_MenuLobby) == 1 ? "" : "S");
+  DrawPageChrome(pDisp, PageTitle(TW64_PAGE_AVATAR), aCrumb,
+                 "D-PAD CHOOSE    A READY    B CHANGE    START NEXT",
+                 Pads);
+
+  enum { GRID_X = 31, GRID_Y = 86, CELL_W = 65, CELL_H = 46 };
+  for (int Avatar = 0; Avatar < TW64_NUM_AVATARS; ++Avatar) {
+    const int X = GRID_X + (Avatar & 3) * CELL_W;
+    const int Y = GRID_Y + (Avatar >> 2) * CELL_H;
+    bool Selected = false;
+    for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port)
+      Selected |= g_MenuLobby.m_aJoined[Port] &&
+                  g_MenuLobby.m_aHumanAvatar[Port] == Avatar;
+    Tw64RenderShade(X, Y, CELL_W - 3, CELL_H - 2,
+                    Selected ? 34 : 12, Selected ? 62 : 18,
+                    Selected ? 116 : 34, Selected ? 225 : 195);
+    if (Selected)
+      Tw64RenderShade(X, Y, CELL_W - 3, 2, 255, 208, 80, 255);
+  }
+
+  for (int Avatar = 0; Avatar < TW64_NUM_AVATARS; ++Avatar) {
+    const int X = GRID_X + (Avatar & 3) * CELL_W;
+    const int Y = GRID_Y + (Avatar >> 2) * CELL_H;
+    Tw64RenderAvatar(Avatar, X + 31, Y + 17, 27);
+  }
+
+  for (int Avatar = 0; Avatar < TW64_NUM_AVATARS; ++Avatar) {
+    const int X = GRID_X + (Avatar & 3) * CELL_W;
+    const int Y = GRID_Y + (Avatar >> 2) * CELL_H;
+    Tw64RenderTextF(TW64_FONT_SMALL, X + 31, Y + 31,
+                    Tw64AvatarName(Avatar), 205, 215, 235,
+                    TW64_ALIGN_CENTER);
+    int Marker = 0;
+    for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+      if (!g_MenuLobby.m_aJoined[Port] ||
+          g_MenuLobby.m_aHumanAvatar[Port] != Avatar)
+        continue;
+      uint8_t R, G, B;
+      if (s_aModes[MenuMode()].m_Teams)
+        Tw64TeamColor(g_MenuLobby.m_aHumanTeam[Port], Port & 1, &R, &G, &B);
+      else
+        Tw64AvatarColor(Avatar, &R, &G, &B);
+      char aPlayer[8];
+      str_format(aPlayer, sizeof(aPlayer), "P%d", Port + 1);
+      Tw64RenderTextF(TW64_FONT_SMALL, X + 4 + Marker * 15, Y + 2, aPlayer, R,
+                      G, B, TW64_ALIGN_LEFT);
+      ++Marker;
+    }
+  }
+
+  for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+    if (!g_MenuLobby.m_aJoined[Port])
+      continue;
+    uint8_t R, G, B;
+    if (s_aModes[MenuMode()].m_Teams)
+      Tw64TeamColor(g_MenuLobby.m_aHumanTeam[Port], Port & 1, &R, &G, &B);
+    else
+      Tw64AvatarColor(g_MenuLobby.m_aHumanAvatar[Port], &R, &G, &B);
+    char aStatus[32];
+    str_format(aStatus, sizeof(aStatus), "P%d %s  %s", Port + 1,
+               Tw64AvatarName(g_MenuLobby.m_aHumanAvatar[Port]),
+               g_MenuLobby.m_aAvatarReady[Port] ? "READY" : "A READY");
+    const int X = Port & 1 ? 166 : 31;
+    const int Y = 184 + (Port >> 1) * 15;
+    Tw64RenderTextF(TW64_FONT_SMALL, X, Y, aStatus, R, G, B,
+                    TW64_ALIGN_LEFT);
+  }
+  Tw64RenderEndPage();
+}
+
+void DrawLobbyFrame(int Pads) {
+  Tw64AudioUpdate();
+  Tw64RumbleUpdate();
+  surface_t *pDisp = display_get();
+  Tw64RenderBeginMenuPage(pDisp, g_PageFrame++, true);
+
+  char aCrumb[64];
+  const bool Teamplay = s_aModes[MenuMode()].m_Teams;
+  str_copy(aCrumb, s_aModes[MenuMode()].m_pLabel, sizeof(aCrumb));
+  DrawPageChrome(
+      pDisp, PageTitle(TW64_PAGE_LOBBY), aCrumb,
+      Teamplay ? "A JOIN   </> TEAM   START NEXT   B BACK"
+               : "A JOIN   START NEXT   B BACK",
+      Pads);
+  for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+    const int Y = TW64_MENU_ROW_Y + Port * 23;
+    const bool Joined = g_MenuLobby.m_aJoined[Port];
+    const bool Connected = joypad_is_connected((joypad_port_t)Port);
+    uint8_t R = 122, G = 140, B = 172;
+    if (Joined) {
+      if (Teamplay)
+        Tw64TeamColor(g_MenuLobby.m_aHumanTeam[Port], Port & 1, &R, &G, &B);
+      else
+        Tw64AvatarColor(g_MenuLobby.m_aHumanAvatar[Port], &R, &G, &B);
+      Tw64RenderShade(TW64_PAGE_BODY_X, Y - 3, TW64_PAGE_BODY_W, 20, R / 5,
+                      G / 5, B / 5, 220);
+      Tw64RenderShade(TW64_PAGE_BODY_X, Y - 3, 3, 20, R, G, B, 255);
+    }
+
+    char aLeft[24];
+    char aRight[32];
+    str_format(aLeft, sizeof(aLeft), "P%d%s", Port + 1,
+               Port == g_MenuLobby.m_LeaderPort ? "  HOST" : "");
+    if (Joined && Teamplay) {
+      const char *pTeam = g_MenuLobby.m_aHumanTeam[Port] == TW64_TEAM_BLUE
+                              ? "BLUE"
+                              : "RED";
+      if (Port == g_MenuLobby.m_LeaderPort)
+        str_copy(aRight, pTeam, sizeof(aRight));
+      else
+        str_format(aRight, sizeof(aRight), "%s   B LEAVE", pTeam);
+    } else if (Joined)
+      str_copy(aRight, Port == g_MenuLobby.m_LeaderPort ? "JOINED"
+                                                        : "B LEAVE",
+               sizeof(aRight));
+    else if (Connected || g_Tw64AutoplayMode)
+      str_copy(aRight, "A  JOIN", sizeof(aRight));
+    else
+      str_copy(aRight, "CONNECT CONTROLLER", sizeof(aRight));
+
+    Tw64RenderTextF(Joined ? TW64_FONT_MENU : TW64_FONT_SMALL,
+                    TW64_MENU_LABEL_X, Y, aLeft, R, G, B, TW64_ALIGN_LEFT);
+    Tw64RenderTextF(TW64_FONT_SMALL, TW64_MENU_NOTE_X, Y + 2, aRight, R, G, B,
+                    TW64_ALIGN_RIGHT);
+  }
+
+  Tw64RenderEndPage();
+}
+
+int BenchmarkActorCount() {
+  static const int s_aActors[] = {2, 4, 6, 8, 10, 12, 14, 16};
+  return s_aActors[g_MatchCount %
+                   (int)(sizeof(s_aActors) / sizeof(s_aActors[0]))];
+}
+
+void SetupAutoplayLobby(const CTw64AutoplaySpec *pSpec, bool Teamplay) {
+  Tw64LobbyReset(&g_MenuLobby);
+  for (int Port = 0; Port < pSpec->m_NumHumans; ++Port) {
+    Tw64LobbyJoin(&g_MenuLobby, Port, Teamplay);
+    g_MenuLobby.m_aHumanAvatar[Port] = Port % TW64_NUM_AVATARS;
+    Tw64LobbySetAvatarReady(&g_MenuLobby, Port, true);
+  }
+
+  if (pSpec->m_HumanVersusHuman) {
+    g_MenuLobby.m_aBots[TW64_TEAM_RED] = 0;
+    g_MenuLobby.m_aBots[TW64_TEAM_BLUE] = 0;
+  } else if (pSpec->m_FlexibleTeams) {
+    for (int Port = 0; Port < pSpec->m_NumHumans; ++Port)
+      Tw64LobbySetHumanTeam(&g_MenuLobby, Port, TW64_TEAM_BLUE);
+    g_MenuLobby.m_aBots[TW64_TEAM_BLUE] = 0;
+    g_MenuLobby.m_aBots[TW64_TEAM_RED] = 4;
+  } else if (pSpec->m_Benchmark) {
+    g_MenuLobby.m_aBots[TW64_TEAM_RED] =
+        BenchmarkActorCount() - pSpec->m_NumHumans;
+  } else {
+    Tw64LobbySetQuickStartBots(&g_MenuLobby, Teamplay,
+                               TW64_MAX_INTERACTIVE_PLAYERS);
+  }
+}
+
 /* The entry an autoplay ROM confirms on `Page`; the unattended variants walk
- * the same four pages a player would rather than short-circuiting them. */
+ * the same pages a player would rather than short-circuiting them. */
 int AutoplaySelection(int Page, const CTw64AutoplaySpec *pSpec) {
   /* The rotation soak derives mode and map from the match counter instead of
    * the spec, so consecutive matches walk the whole staged map list. */
@@ -1389,8 +1636,10 @@ int AutoplaySelection(int Page, const CTw64AutoplaySpec *pSpec) {
     if (Rotation >= 0)
       return RotateFlags ? TW64_MODE_CTF : TW64_MODE_DM;
     return pSpec->m_Mode;
-  case TW64_PAGE_PLAYERS:
-    return pSpec->m_NumHumans - 1;
+  case TW64_PAGE_LOBBY:
+  case TW64_PAGE_AVATAR:
+  case TW64_PAGE_BOTS:
+    return 0;
   case TW64_PAGE_DIFFICULTY:
     return pSpec->m_Difficulty;
   default:
@@ -1398,6 +1647,17 @@ int AutoplaySelection(int Page, const CTw64AutoplaySpec *pSpec) {
       return MapIndex(RotateFlags, s_aMaps[Rotation].m_pName);
     return MapIndex(s_aModes[pSpec->m_Mode].m_Flags, pSpec->m_pMap);
   }
+}
+
+void DrawCurrentMenuFrame(int Page, int Pads) {
+  if (Page == TW64_PAGE_LOBBY)
+    DrawLobbyFrame(Pads);
+  else if (Page == TW64_PAGE_AVATAR)
+    DrawAvatarFrame(Pads);
+  else if (Page == TW64_PAGE_MAP)
+    DrawMapFrame(g_aMenuSelection[Page], Pads);
+  else
+    DrawMenuFrame(Page, g_aMenuSelection[Page], Pads);
 }
 
 /* Returns the chosen match configuration. */
@@ -1410,90 +1670,290 @@ void RunMenu(CMatchConfig *pConfig) {
    * consecutive frames. */
   int PageFrames = 0;
   bool Announced = false;
+  bool BotsInitialized = false;
 
-  /* Start with the full-screen single-player setup: one local player and
-   * three bots. Connected controllers remain available through the player
-   * count page, but do not turn the default match into split screen. */
+  /* The first controller that confirms a mode becomes leader. It owns global
+   * choices; every controller still owns its join/leave and team buttons on
+   * the lobby page. */
   g_aMenuSelection[TW64_PAGE_MODE] = 0;
-  g_aMenuSelection[TW64_PAGE_PLAYERS] = 0;
+  g_aMenuSelection[TW64_PAGE_LOBBY] = 0;
+  g_aMenuSelection[TW64_PAGE_AVATAR] = 0;
+  g_aMenuSelection[TW64_PAGE_BOTS] = 0;
   g_aMenuSelection[TW64_PAGE_DIFFICULTY] = 1;
   g_aMenuSelection[TW64_PAGE_MAP] = 0;
+  Tw64LobbyReset(&g_MenuLobby);
 
   while (true) {
     joypad_poll();
     const int Pads = ConnectedPads();
-    const joypad_buttons_t Pressed = AnyPadPressed();
-
-    bool Confirm = Pressed.a != 0;
-    bool Back = Pressed.b != 0;
-    int Move = 0;
-    if (Pressed.d_down)
-      Move += 1;
-    if (Pressed.d_up)
-      Move -= 1;
-
-    if (pSpec && PageFrames >= TW64_AUTOPLAY_MENU_FRAMES) {
-      g_aMenuSelection[Page] = AutoplaySelection(Page, pSpec);
-      Confirm = true;
-      Move = 0;
-      Back = false;
+    joypad_buttons_t aPressed[TW64_MAX_HUMANS];
+    for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+      mem_zero(&aPressed[Port], sizeof(aPressed[Port]));
+      if (joypad_is_connected((joypad_port_t)Port))
+        aPressed[Port] = joypad_get_buttons_pressed((joypad_port_t)Port);
     }
-
-    const int NumEntries = MenuEntryCount(Page);
-    int Selection = g_aMenuSelection[Page];
-    if (Selection >= NumEntries)
-      Selection = NumEntries - 1;
-    if (Selection < 0)
-      Selection = 0;
-    if (Move) {
-      Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
-      Selection += Move;
-      if (Selection < 0)
-        Selection = NumEntries - 1;
-      if (Selection >= NumEntries)
-        Selection = 0;
-    }
-    g_aMenuSelection[Page] = Selection;
-
-    if (Back && Page > TW64_PAGE_MODE) {
-      Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
-      --Page;
+    if (!pSpec && g_MenuLobby.m_LeaderPort >= 0 &&
+        !joypad_is_connected((joypad_port_t)g_MenuLobby.m_LeaderPort)) {
+      Tw64LobbyLeave(&g_MenuLobby, g_MenuLobby.m_LeaderPort);
+      /* Transfer to the next joined pad. If nobody remains, return to the
+       * multi-controller page so a reconnect can acquire ownership. */
+      if (g_MenuLobby.m_LeaderPort < 0 && Page != TW64_PAGE_MODE)
+        Page = TW64_PAGE_LOBBY;
       PageFrames = 0;
-      Confirm = false;
-    } else if (Confirm) {
-      Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
-      if (Page == TW64_PAGE_MODE) {
-        /* The map list is mode-filtered, so a mode change invalidates it. */
-        g_aMenuSelection[TW64_PAGE_MAP] = 0;
-        ++Page;
-        PageFrames = 0;
-      } else if (Page < TW64_PAGE_MAP) {
-        ++Page;
-        PageFrames = 0;
-      } else {
-        const int Mode = MenuMode();
-        const int Humans = g_aMenuSelection[TW64_PAGE_PLAYERS] + 1;
-        const int Difficulty = g_aMenuSelection[TW64_PAGE_DIFFICULTY];
-        pConfig->m_Mode = Mode;
-        pConfig->m_NumHumans = Humans;
-        pConfig->m_NumPlayers = TW64_MAX_LOCAL;
-        pConfig->m_Difficulty = Difficulty;
-        pConfig->m_pMap = MapAt(s_aModes[Mode].m_Flags, Selection);
-        pConfig->m_pBotPolicy = DifficultyPolicy(Mode, Difficulty);
-        pConfig->m_pDriverPolicy =
-            pSpec ? DifficultyPolicy(Mode, Difficulty) : 0;
-        str_format(pConfig->m_aLabel, sizeof(pConfig->m_aLabel), "%s-%dp-%s",
-                   s_aModes[Mode].m_pId, Humans, DifficultyName(Difficulty));
-        pConfig->m_TimeLimitTicks =
-            pSpec ? pSpec->m_TimeLimitTicks : TW64_TIME_LIMIT_TICKS;
-        return;
-      }
     }
+    /* Apply unattended choices for the whole dwell, not only on the confirm
+     * frame. Captured pages must show the exact mode, difficulty and level the
+     * following match actually uses. */
+    if (pSpec && Page != TW64_PAGE_LOBBY && Page != TW64_PAGE_AVATAR)
+      g_aMenuSelection[Page] = AutoplaySelection(Page, pSpec);
 
-    DrawMenuFrame(Page, g_aMenuSelection[Page], Pads);
+    /* The lobby is multi-cursor: each physical controller changes only its
+     * own slot. The leader's B is reserved for page navigation. */
+    if (Page == TW64_PAGE_LOBBY) {
+      bool Back = false;
+      bool Confirm = false;
+      if (pSpec) {
+        Confirm = PageFrames >= AutoplayMenuFrames(pSpec);
+      } else {
+        for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+          if (g_MenuLobby.m_aJoined[Port] &&
+              !joypad_is_connected((joypad_port_t)Port)) {
+            Tw64LobbyLeave(&g_MenuLobby, Port);
+            continue;
+          }
+          if (!g_MenuLobby.m_aJoined[Port]) {
+            if (aPressed[Port].a) {
+              Tw64LobbyJoin(&g_MenuLobby, Port,
+                            s_aModes[MenuMode()].m_Teams);
+              Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+            }
+            continue;
+          }
+          if (Port == g_MenuLobby.m_LeaderPort && aPressed[Port].b) {
+            Back = true;
+            continue;
+          }
+          if (Port != g_MenuLobby.m_LeaderPort && aPressed[Port].b) {
+            Tw64LobbyLeave(&g_MenuLobby, Port);
+            Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+            continue;
+          }
+          if (s_aModes[MenuMode()].m_Teams && aPressed[Port].d_left) {
+            Tw64LobbySetHumanTeam(&g_MenuLobby, Port, TW64_TEAM_BLUE);
+            Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+          } else if (s_aModes[MenuMode()].m_Teams &&
+                     aPressed[Port].d_right) {
+            Tw64LobbySetHumanTeam(&g_MenuLobby, Port, TW64_TEAM_RED);
+            Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+          }
+        }
+        const int Leader = g_MenuLobby.m_LeaderPort;
+        Confirm = Leader >= 0 && aPressed[Leader].start;
+      }
+
+      if (Back) {
+        Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+        Page = Tw64MenuPreviousPage(TW64_PAGE_LOBBY,
+                                    Tw64LobbyBotCount(&g_MenuLobby));
+        PageFrames = 0;
+      } else if (Confirm && Tw64LobbyHumanCount(&g_MenuLobby) > 0) {
+        if (!BotsInitialized) {
+          Tw64LobbySetQuickStartBots(&g_MenuLobby,
+                                     s_aModes[MenuMode()].m_Teams,
+                                     pSpec && pSpec->m_Benchmark
+                                         ? TW64_MAX_MATCH_PLAYERS
+                                         : TW64_MAX_INTERACTIVE_PLAYERS);
+          BotsInitialized = true;
+        }
+        Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+        Page = Tw64MenuNextPage(TW64_PAGE_LOBBY,
+                                Tw64LobbyBotCount(&g_MenuLobby));
+        PageFrames = 0;
+      }
+      DrawCurrentMenuFrame(Page, Pads);
+    } else if (Page == TW64_PAGE_AVATAR) {
+      bool Back = false;
+      bool Confirm = false;
+      if (pSpec) {
+        Confirm = PageFrames >= AutoplayMenuFrames(pSpec);
+      } else {
+        for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+          if (!g_MenuLobby.m_aJoined[Port])
+            continue;
+          if (!joypad_is_connected((joypad_port_t)Port)) {
+            Tw64LobbyLeave(&g_MenuLobby, Port);
+            continue;
+          }
+
+          if (g_MenuLobby.m_aAvatarReady[Port]) {
+            if (aPressed[Port].b) {
+              Tw64LobbySetAvatarReady(&g_MenuLobby, Port, false);
+              Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+            }
+            continue;
+          }
+
+          int Delta = 0;
+          if (aPressed[Port].d_left)
+            --Delta;
+          if (aPressed[Port].d_right)
+            ++Delta;
+          if (aPressed[Port].d_up)
+            Delta -= 4;
+          if (aPressed[Port].d_down)
+            Delta += 4;
+          if (Delta &&
+              Tw64LobbyAdjustHumanAvatar(&g_MenuLobby, Port, Delta))
+            Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+          if (aPressed[Port].a) {
+            Tw64LobbySetAvatarReady(&g_MenuLobby, Port, true);
+            Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+          } else if (Port == g_MenuLobby.m_LeaderPort &&
+                     aPressed[Port].b) {
+            Back = true;
+          }
+        }
+        const int Leader = g_MenuLobby.m_LeaderPort;
+        Confirm = Leader >= 0 && aPressed[Leader].start &&
+                  Tw64LobbyAllHumansReady(&g_MenuLobby);
+      }
+
+      if (Back) {
+        Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+        Page = Tw64MenuPreviousPage(TW64_PAGE_AVATAR,
+                                    Tw64LobbyBotCount(&g_MenuLobby));
+        PageFrames = 0;
+      } else if (Confirm && Tw64LobbyAllHumansReady(&g_MenuLobby)) {
+        Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+        Page = Tw64MenuNextPage(TW64_PAGE_AVATAR,
+                                Tw64LobbyBotCount(&g_MenuLobby));
+        PageFrames = 0;
+      }
+      DrawCurrentMenuFrame(Page, Pads);
+    } else {
+      joypad_buttons_t Pressed;
+      mem_zero(&Pressed, sizeof(Pressed));
+      int ConfirmingPort = -1;
+      if (pSpec) {
+        if (PageFrames >= AutoplayMenuFrames(pSpec)) {
+          Pressed.a = 1;
+          ConfirmingPort = 0;
+        }
+      } else if (g_MenuLobby.m_LeaderPort >= 0) {
+        Pressed = aPressed[g_MenuLobby.m_LeaderPort];
+        ConfirmingPort = g_MenuLobby.m_LeaderPort;
+      } else {
+        Pressed = AnyPadPressed();
+        for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port)
+          if (ConfirmingPort < 0 && aPressed[Port].a)
+            ConfirmingPort = Port;
+      }
+
+      const int NumEntries = MenuEntryCount(Page);
+      int Selection = g_aMenuSelection[Page];
+      if (Selection >= NumEntries)
+        Selection = NumEntries - 1;
+      if (Selection < 0)
+        Selection = 0;
+      const int Move = Tw64MenuNavigationDelta(
+          Page, Pressed.d_up, Pressed.d_down, Pressed.d_left,
+          Pressed.d_right);
+      if (Move && NumEntries > 0) {
+        Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+        Selection = Tw64MenuWrapSelection(Selection, Move, NumEntries);
+      }
+      g_aMenuSelection[Page] = Selection;
+
+      if (Page == TW64_PAGE_BOTS && !pSpec) {
+        const int Team = s_aModes[MenuMode()].m_Teams
+                             ? (Selection == 0 ? TW64_TEAM_FIRST
+                                               : TW64_TEAM_SECOND)
+                             : TW64_TEAM_RED;
+        const int Delta = Pressed.d_right ? 1 : (Pressed.d_left ? -1 : 0);
+        if (Delta && Tw64LobbyAdjustBots(&g_MenuLobby, Team, Delta,
+                                         TW64_MAX_INTERACTIVE_PLAYERS))
+          Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+      }
+
+      bool Confirm = Pressed.a || Pressed.start;
+      const bool Back = Pressed.b;
+      if (Back && Page > TW64_PAGE_MODE) {
+        Tw64AudioMenu(TW64_MENU_SOUND_MOVE);
+        Page = Tw64MenuPreviousPage(Page, Tw64LobbyBotCount(&g_MenuLobby));
+        PageFrames = 0;
+      } else if (Confirm) {
+        if (Page == TW64_PAGE_MODE) {
+          if (ConfirmingPort >= 0 || pSpec) {
+            const int Leader = pSpec ? 0 : ConfirmingPort;
+            Tw64LobbyReset(&g_MenuLobby);
+            Tw64LobbyJoin(&g_MenuLobby, Leader,
+                          s_aModes[MenuMode()].m_Teams);
+            if (pSpec) {
+              SetupAutoplayLobby(pSpec, s_aModes[MenuMode()].m_Teams);
+              BotsInitialized = true;
+            } else {
+              BotsInitialized = false;
+            }
+            g_aMenuSelection[TW64_PAGE_MAP] = 0;
+            Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+            Page = TW64_PAGE_LOBBY;
+            PageFrames = 0;
+          }
+        } else if (Page == TW64_PAGE_BOTS) {
+          const int MaxPlayers = pSpec && pSpec->m_Benchmark
+                                     ? TW64_MAX_MATCH_PLAYERS
+                                     : TW64_MAX_INTERACTIVE_PLAYERS;
+          if (Tw64LobbyValidate(&g_MenuLobby,
+                                s_aModes[MenuMode()].m_Teams,
+                                MaxPlayers) == TW64_LOBBY_VALID) {
+            Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+            Page = Tw64MenuNextPage(Page,
+                                    Tw64LobbyBotCount(&g_MenuLobby));
+            PageFrames = 0;
+          }
+        } else if (Page < TW64_PAGE_MAP) {
+          Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+          Page = Tw64MenuNextPage(Page, Tw64LobbyBotCount(&g_MenuLobby));
+          PageFrames = 0;
+        } else {
+          Tw64AudioMenu(TW64_MENU_SOUND_CONFIRM);
+          const int Mode = MenuMode();
+          const int Difficulty = g_aMenuSelection[TW64_PAGE_DIFFICULTY];
+          pConfig->m_Mode = Mode;
+          pConfig->m_NumHumans = Tw64LobbyHumanCount(&g_MenuLobby);
+          pConfig->m_NumPlayers = Tw64LobbyBuildRoster(
+              &g_MenuLobby, s_aModes[Mode].m_Teams, pConfig->m_aActors,
+              TW64_MAX_MATCH_PLAYERS);
+          pConfig->m_Difficulty = Difficulty;
+          pConfig->m_pMap = MapAt(s_aModes[Mode].m_Flags, Selection);
+          pConfig->m_pBotPolicy = DifficultyPolicy(Mode, Difficulty);
+          /* The benchmark's human stays neutral so `bots=N` means exactly N
+           * AI policy evaluations. Other autoplay variants keep a driver so
+           * their unattended footage exercises the human input seam. */
+          pConfig->m_pDriverPolicy =
+              pSpec && !pSpec->m_Benchmark
+                  ? DifficultyPolicy(Mode, Difficulty)
+                  : 0;
+          str_format(pConfig->m_aLabel, sizeof(pConfig->m_aLabel),
+                     "%s-%dh%db-%s", s_aModes[Mode].m_pId,
+                     pConfig->m_NumHumans,
+                     pConfig->m_NumPlayers - pConfig->m_NumHumans,
+                     DifficultyName(Difficulty));
+          pConfig->m_TimeLimitTicks =
+              pSpec ? pSpec->m_TimeLimitTicks : TW64_TIME_LIMIT_TICKS;
+          pConfig->m_Benchmark = pSpec && pSpec->m_Benchmark;
+          return;
+        }
+      }
+
+      DrawCurrentMenuFrame(Page, Pads);
+    }
     if (!Announced) {
-      debugf("TW64 MENU_OK pads=%d autoplay=%d modes=%d maps=%d\n", Pads,
-             g_Tw64AutoplayMode, TW64_NUM_MODES, TW64_NUM_MAPS);
+      debugf("TW64 MENU_OK pads=%d autoplay=%d modes=%d maps=%d "
+             "max_humans=%d max_actors=%d max_bots=%d\n",
+             Pads, g_Tw64AutoplayMode, TW64_NUM_MODES, TW64_NUM_MAPS,
+             TW64_MAX_HUMANS, TW64_MAX_INTERACTIVE_PLAYERS,
+             TW64_MAX_INTERACTIVE_BOTS);
       Announced = true;
     }
     ++PageFrames;
@@ -1508,23 +1968,41 @@ void EndScreenPlayerColor(int ClientID, uint8_t *pR, uint8_t *pG,
                           uint8_t *pB) {
   CPlayer *pPlayer = g_pGameServer->m_apPlayers[ClientID];
   const int Team = pPlayer ? pPlayer->GetTeam() : -1;
-  if (s_aModes[g_Match.m_Mode].m_Teams && (Team == TEAM_RED || Team == TEAM_BLUE))
-    Tw64TeamColor(Team, ClientID >= 2 ? 1 : 0, pR, pG, pB);
-  else
-    Tw64PlayerColor(ClientID, pR, pG, pB);
+  if (s_aModes[g_Match.m_Mode].m_Teams &&
+      (Team == TEAM_RED || Team == TEAM_BLUE)) {
+    int Slot = 0;
+    for (int i = 0; i < ClientID; ++i)
+      if (g_Match.m_aActors[i].m_Team == Team)
+        ++Slot;
+    Tw64TeamColor(Team, Slot, pR, pG, pB);
+  } else {
+    Tw64AvatarColor(g_aPlayerAvatars[ClientID], pR, pG, pB);
+  }
 }
 
-void RunEndScreen() {
+enum ETw64EndAction { TW64_END_CHANGE_SETUP = 0, TW64_END_REMATCH };
+
+int RunEndScreen() {
   const bool Teams = s_aModes[g_Match.m_Mode].m_Teams;
+  int BestPlayer = -1;
+  for (int i = 0; i < g_Match.m_NumPlayers; ++i)
+    if (g_pGameServer->m_apPlayers[i] &&
+        (BestPlayer < 0 || g_pGameServer->m_apPlayers[i]->m_Score >
+                               g_pGameServer->m_apPlayers[BestPlayer]->m_Score))
+      BestPlayer = i;
+  const int RedScore = Teams ? DisplayTeamScore(TEAM_RED) : 0;
+  const int BlueScore = Teams ? DisplayTeamScore(TEAM_BLUE) : 0;
   int Frames = 0;
   while (true) {
     joypad_poll();
     const joypad_buttons_t Pressed = AnyPadPressed();
     if (!g_Tw64AutoplayMode && Pressed.a)
-      return;
+      return TW64_END_REMATCH;
+    if (!g_Tw64AutoplayMode && Pressed.b)
+      return TW64_END_CHANGE_SETUP;
     const CTw64AutoplaySpec *pSpec = AutoplaySpec();
     if (pSpec && pSpec->m_Loop && Frames >= TW64_AUTOPLAY_END_FRAMES)
-      return;
+      return TW64_END_CHANGE_SETUP;
     ++Frames;
 
     Tw64AudioUpdate();
@@ -1535,16 +2013,28 @@ void RunEndScreen() {
     Tw64RenderBeginMenuPage(pDisp, g_PageFrame++, false);
 
     char aBuf[48];
-    char aMode[24];
-    char aMap[24];
-    UpperCopy(aMode, sizeof(aMode), g_Match.m_aLabel);
-    UpperCopy(aMap, sizeof(aMap), g_Match.m_pMap);
-    str_format(aBuf, sizeof(aBuf), "%s / %s", aMode, aMap);
+    const bool Flags = s_aModes[g_Match.m_Mode].m_Flags;
+    str_format(aBuf, sizeof(aBuf), "%s / %s",
+               s_aModes[g_Match.m_Mode].m_pLabel,
+               MapThemeAt(Flags, MapIndex(Flags, g_Match.m_pMap)));
     DrawPageChrome(pDisp, "FINAL SCORE", aBuf,
-                   g_Tw64AutoplayMode ? "AUTOPLAY COMPLETE" : "A  BACK TO MENU",
+                   "A REMATCH      B CHANGE SETUP",
                    ConnectedPads());
-    Tw64RenderTextF(TW64_FONT_MENU, TW64_SCREEN_W / 2, 30, "MATCH OVER", 255,
-                    214, 110, TW64_ALIGN_CENTER);
+    uint8_t WinnerR = 255, WinnerG = 214, WinnerB = 110;
+    if (Teams && RedScore > BlueScore) {
+      str_copy(aBuf, "RED TEAM WINS", sizeof(aBuf));
+      Tw64TeamColor(TEAM_RED, 0, &WinnerR, &WinnerG, &WinnerB);
+    } else if (Teams && BlueScore > RedScore) {
+      str_copy(aBuf, "BLUE TEAM WINS", sizeof(aBuf));
+      Tw64TeamColor(TEAM_BLUE, 0, &WinnerR, &WinnerG, &WinnerB);
+    } else if (Teams || BestPlayer < 0) {
+      str_copy(aBuf, "DRAW", sizeof(aBuf));
+    } else {
+      str_format(aBuf, sizeof(aBuf), "%s WINS", g_apPlayerNames[BestPlayer]);
+      EndScreenPlayerColor(BestPlayer, &WinnerR, &WinnerG, &WinnerB);
+    }
+    Tw64RenderTextF(TW64_FONT_MENU, TW64_SCREEN_W / 2, 30, aBuf, WinnerR,
+                    WinnerG, WinnerB, TW64_ALIGN_CENTER);
     UpperCopy(aBuf, sizeof(aBuf), s_aModes[g_Match.m_Mode].m_pRule);
     Tw64RenderTextF(TW64_FONT_SMALL, TW64_SCREEN_W / 2, 48, aBuf, 150, 168,
                     205, TW64_ALIGN_CENTER);
@@ -1553,19 +2043,23 @@ void RunEndScreen() {
     if (Teams) {
       /* Both team scores on one line, each in its own team colour. */
       uint8_t R, G, B;
-      str_format(aBuf, sizeof(aBuf), "RED %d", DisplayTeamScore(TEAM_RED));
-      Tw64TeamColor(TEAM_RED, 0, &R, &G, &B);
-      Tw64RenderTextF(TW64_FONT_MENU, TW64_SCREEN_W / 2 - 16,
-                      TW64_MENU_ROW_Y, aBuf, R, G, B, TW64_ALIGN_RIGHT);
       str_format(aBuf, sizeof(aBuf), "BLUE %d", DisplayTeamScore(TEAM_BLUE));
       Tw64TeamColor(TEAM_BLUE, 0, &R, &G, &B);
+      Tw64RenderTextF(TW64_FONT_MENU, TW64_SCREEN_W / 2 - 16,
+                      TW64_MENU_ROW_Y, aBuf, R, G, B, TW64_ALIGN_RIGHT);
+      str_format(aBuf, sizeof(aBuf), "RED %d", DisplayTeamScore(TEAM_RED));
+      Tw64TeamColor(TEAM_RED, 0, &R, &G, &B);
       Tw64RenderTextF(TW64_FONT_MENU, TW64_SCREEN_W / 2 + 16,
                       TW64_MENU_ROW_Y, aBuf, R, G, B, TW64_ALIGN_LEFT);
       Row = 1;
     }
 
-    bool aUsed[TW64_MAX_LOCAL] = {false, false, false, false};
-    for (int Rank = 0; Rank < g_Match.m_NumPlayers; ++Rank) {
+    bool aUsed[TW64_MAX_MATCH_PLAYERS] = {};
+    const int VisiblePlayers =
+        g_Match.m_NumPlayers < TW64_MAX_INTERACTIVE_PLAYERS
+            ? g_Match.m_NumPlayers
+            : TW64_MAX_INTERACTIVE_PLAYERS;
+    for (int Rank = 0; Rank < VisiblePlayers; ++Rank) {
       int Best = -1;
       for (int i = 0; i < g_Match.m_NumPlayers; ++i) {
         if (aUsed[i] || !g_pGameServer->m_apPlayers[i])
@@ -1584,8 +2078,9 @@ void RunEndScreen() {
        * instead of by padding a monospaced string: rank and name from the
        * left, score against a fixed right edge, flag stats after it. */
       if (Rank == 0) {
-        /* The winner keeps the menu's selected-row treatment, so the page the
-         * match ends on is read the same way as the page it started from. */
+        /* The top scorer keeps the menu's selected-row treatment. Team victory
+         * remains explicit in the headline rather than being inferred from an
+         * individual ordering. */
         Tw64RenderShade(TW64_PAGE_BODY_X, Y - 3, TW64_PAGE_BODY_W,
                         TW64_MENU_ROW_STEP, 34, 62, 116, 205);
         Tw64RenderShade(TW64_PAGE_BODY_X, Y - 3, 3, TW64_MENU_ROW_STEP, 255,
@@ -1628,13 +2123,28 @@ void RunEndScreen() {
 /* ------------------------------------------------------------------ */
 
 void RunMatchLoop() {
+  int RedHumans = 0;
+  int BlueHumans = 0;
+  int RedBots = 0;
+  int BlueBots = 0;
+  for (int i = 0; i < g_Match.m_NumPlayers; ++i) {
+    const CTw64ActorSlot &Actor = g_Match.m_aActors[i];
+    int *pCount = 0;
+    if (Actor.m_Kind == TW64_ACTOR_HUMAN)
+      pCount = Actor.m_Team == TW64_TEAM_BLUE ? &BlueHumans : &RedHumans;
+    else
+      pCount = Actor.m_Team == TW64_TEAM_BLUE ? &BlueBots : &RedBots;
+    ++*pCount;
+  }
   debugf("TW64 GAME_START mode=%s map=%s humans=%d players=%d bots=%s "
-         "driver=%s views=%d teams=%d flags=%d\n",
+         "driver=%s views=%d teams=%d flags=%d blue=%dh+%db red=%dh+%db "
+         "benchmark=%d\n",
          g_Match.m_aLabel, g_Match.m_pMap, g_Match.m_NumHumans,
          g_Match.m_NumPlayers, g_Match.m_pBotPolicy,
          g_Match.m_pDriverPolicy ? g_Match.m_pDriverPolicy : "none",
          g_NumViewports, s_aModes[g_Match.m_Mode].m_Teams ? 1 : 0,
-         s_aModes[g_Match.m_Mode].m_Flags ? 1 : 0);
+         s_aModes[g_Match.m_Mode].m_Flags ? 1 : 0, BlueHumans, BlueBots,
+         RedHumans, RedBots, g_Match.m_Benchmark ? 1 : 0);
 
   uint64_t Last = get_ticks_us();
   uint64_t Accumulator = 0;
@@ -1690,10 +2200,13 @@ void RunMatchLoop() {
 
 void Tw64RunGame(void) {
   Tw64RenderInit();
-  for (int i = 0; i < TW64_MAX_LOCAL; ++i) {
+  for (int i = 0; i < TW64_MAX_MATCH_PLAYERS; ++i) {
     g_apAutoDrivers[i] = 0;
     g_apPlayerNames[i] = "";
-    Tw64InputReset(&g_aHumanInput[i]);
+  }
+  for (int Port = 0; Port < TW64_MAX_HUMANS; ++Port) {
+    Tw64InputReset(&g_aHumanInput[Port]);
+    g_aClientByPort[Port] = -1;
   }
   g_aLoadedMap[0] = 0;
 
@@ -1704,10 +2217,10 @@ void Tw64RunGame(void) {
   debugf("TW64 INPUT_SELFTEST failures=0x%x pads=%d\n", InputFailures,
          ConnectedPads());
 
-  DrawSimplePage("LOADING", "engine, assets and map", 0);
+  DrawSimplePage("LOADING", 0, 0);
   if (!BootEngine()) {
     while (true)
-      DrawSimplePage("ENGINE INIT FAILED", "the ROM cannot start a match", 0);
+      DrawSimplePage("COULD NOT START", "PLEASE RESTART", 0);
   }
   debugf("TW64 ENGINE_OK heap=%d heap_base=%d maps=%d modes=%d\n",
          HeapUsed() - g_HeapBase, g_HeapBase, TW64_NUM_MAPS, TW64_NUM_MODES);
@@ -1716,21 +2229,25 @@ void Tw64RunGame(void) {
     CMatchConfig Config;
     mem_zero(&Config, sizeof(Config));
     RunMenu(&Config);
+    bool Rematch = true;
+    while (Rematch) {
+      const bool Flags = s_aModes[Config.m_Mode].m_Flags;
+      DrawSimplePage("STARTING MATCH", s_aModes[Config.m_Mode].m_pLabel,
+                     MapThemeAt(Flags, MapIndex(Flags, Config.m_pMap)));
+      const uint64_t LoadBegin = get_ticks_us();
+      if (!StartMatch(Config)) {
+        while (true)
+          DrawSimplePage("COULD NOT LOAD MATCH", "PLEASE RESTART", 0);
+      }
+      debugf("TW64 MATCH_READY mode=%s map=%s load_us=%lu heap=%d\n",
+             Config.m_aLabel, Config.m_pMap,
+             (unsigned long)(uint32_t)(get_ticks_us() - LoadBegin),
+             HeapUsed() - g_HeapBase);
 
-    DrawSimplePage("STARTING MATCH", Config.m_aLabel, Config.m_pMap);
-    const uint64_t LoadBegin = get_ticks_us();
-    if (!StartMatch(Config)) {
-      while (true)
-        DrawSimplePage("MATCH INIT FAILED", Config.m_aLabel, Config.m_pMap);
+      BuildViewports(Config);
+      RunMatchLoop();
+      Rematch = RunEndScreen() == TW64_END_REMATCH;
+      Tw64RumbleStopAll();
     }
-    debugf("TW64 MATCH_READY mode=%s map=%s load_us=%lu heap=%d\n",
-           Config.m_aLabel, Config.m_pMap,
-           (unsigned long)(uint32_t)(get_ticks_us() - LoadBegin),
-           HeapUsed() - g_HeapBase);
-
-    BuildViewports(Config.m_NumHumans);
-    RunMatchLoop();
-    RunEndScreen();
-    Tw64RumbleStopAll();
   }
 }

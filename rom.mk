@@ -19,6 +19,10 @@
 #   auto-lts         autoplay LTS dm7 2v2, round-based survival      -> teeworlds64-auto-lts.z64
 #   auto-ctf-long    autoplay CTF ctf1, 2 views, 5 min (flag funnel) -> teeworlds64-auto-ctf-long.z64
 #   auto-maps        autoplay map-rotation soak, all 16 staged maps  -> teeworlds64-auto-maps.z64
+#   auto-flex-teams  autoplay TDM, P1+P2 blue versus four red bots   -> teeworlds64-auto-flex-teams.z64
+#   auto-human-1v1   autoplay TDM, P1 blue versus P2 red, no bots     -> teeworlds64-auto-human-1v1.z64
+#   auto-menu-review short looping 2v4 menu and result walkthrough    -> teeworlds64-auto-menu-review.z64
+#   auto-bot-bench   guest-timed 2..16 actor performance sweep       -> teeworlds64-auto-bot-bench.z64
 #   s1               deterministic bot-match scenario 1              -> teeworlds64-s1.z64
 #   s2               deterministic bot-match scenario 2              -> teeworlds64-s2.z64
 #
@@ -99,6 +103,18 @@ else
   else ifeq ($(VARIANT),auto-maps)
     ROM_NAME = teeworlds64-auto-maps
     TW64_AUTOPLAY_MODE = 15
+  else ifeq ($(VARIANT),auto-flex-teams)
+    ROM_NAME = teeworlds64-auto-flex-teams
+    TW64_AUTOPLAY_MODE = 16
+  else ifeq ($(VARIANT),auto-bot-bench)
+    ROM_NAME = teeworlds64-auto-bot-bench
+    TW64_AUTOPLAY_MODE = 17
+  else ifeq ($(VARIANT),auto-human-1v1)
+    ROM_NAME = teeworlds64-auto-human-1v1
+    TW64_AUTOPLAY_MODE = 18
+  else ifeq ($(VARIANT),auto-menu-review)
+    ROM_NAME = teeworlds64-auto-menu-review
+    TW64_AUTOPLAY_MODE = 19
   else
     $(error unknown VARIANT '$(VARIANT)')
   endif
@@ -221,6 +237,8 @@ N64_CPP = \
 	src/game/tw_audio.cpp \
 	src/game/tw_game.cpp \
 	src/game/tw_input.cpp \
+	src/game/tw_lobby.cpp \
+	src/game/tw_menu.cpp \
 	src/game/tw_rumble.cpp \
 	src/game/tw_render.cpp
 N64_MAIN_OBJ = $(BUILD_DIR)/n64/src/main_game.o

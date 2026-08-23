@@ -52,7 +52,15 @@ enum {
    * forever: the proof that every map in the ROM filesystem loads and that
    * the map-reload path survives repetition. */
   TW64_AUTOPLAY_MAPS = 15,
-  TW64_NUM_AUTOPLAY_MODES = 16
+  /* TDM showcase: controller slots P1/P2 share blue against four red bots. */
+  TW64_AUTOPLAY_FLEX_TEAMS = 16,
+  /* Guest-timed sweep over 2..16 actors. Intended for logs, not releases. */
+  TW64_AUTOPLAY_BOT_BENCH = 17,
+  /* TDM with one bot-driven human on each side and no bots. */
+  TW64_AUTOPLAY_HUMAN_1V1 = 18,
+  /* Short looping 2v4 scenario with readable menu dwell for UI evidence. */
+  TW64_AUTOPLAY_MENU_REVIEW = 19,
+  TW64_NUM_AUTOPLAY_MODES = 20
 };
 
 /* Runs menu -> match -> end screen forever. Never returns. */
