@@ -1,0 +1,57 @@
+diff --git a/src/base/detect.h b/src/base/detect.h
+index 2028f5a..3221bc0 100644
+--- a/src/base/detect.h
++++ b/src/base/detect.h
+@@ -85,0 +86,12 @@
++/* nintendo 64 (libdragon/newlib) */
++#if defined(CONF_PLATFORM_N64)
++	/* newlib ships no <endian.h> and detect.h has no MIPS entry, but the
++	   target is a fixed big-endian VR4300, so state it directly. Defined
++	   only by the ROM build; host builds are unaffected. */
++	#define CONF_FAMILY_STRING "n64"
++	#define CONF_PLATFORM_STRING "n64"
++	#define CONF_ARCH_MIPS64 1
++	#define CONF_ARCH_STRING "mips64"
++	#define CONF_ARCH_ENDIAN_BIG 1
++#endif
++
+@@ -87 +99 @@
+-#if defined(__GNUC__) && !defined(__APPLE__) && !defined(__MINGW32__) && !defined(__sun)
++#if defined(__GNUC__) && !defined(CONF_PLATFORM_N64) && !defined(__APPLE__) && !defined(__MINGW32__) && !defined(__sun)
+diff --git a/src/game/server/entities/laser.h b/src/game/server/entities/laser.h
+index 8ae6f79..1f221b0 100644
+--- a/src/game/server/entities/laser.h
++++ b/src/game/server/entities/laser.h
+@@ -17,0 +18,7 @@ public:
++#ifdef CONF_PLATFORM_N64
++	// The renderer draws the beam directly from server entities, so expose the
++	// segment that the desktop client normally receives through a snapshot.
++	// This is read-only and compiled out on every host platform.
++	const vec2 &GetFrom() const { return m_From; }
++#endif
++
+diff --git a/src/game/server/eventhandler.h b/src/game/server/eventhandler.h
+index fc92197..274812d 100644
+--- a/src/game/server/eventhandler.h
++++ b/src/game/server/eventhandler.h
+@@ -29,0 +30,9 @@ public:
++
++#ifdef CONF_PLATFORM_N64
++	// The target has no snapshot pipeline. Its audio layer reads this tick's
++	// authoritative event ring directly, through a bounded read-only view.
++	int NumEvents() const { return m_NumEvents; }
++	int EventType(int Index) const { return m_aTypes[Index]; }
++	int64 EventMask(int Index) const { return m_aClientMasks[Index]; }
++	const void *EventData(int Index) const { return &m_aData[m_aOffsets[Index]]; }
++#endif
+diff --git a/src/game/server/gamecontroller.h b/src/game/server/gamecontroller.h
+index 66949a0..cab3ce2 100644
+--- a/src/game/server/gamecontroller.h
++++ b/src/game/server/gamecontroller.h
+@@ -231,0 +232,6 @@ public:
++#ifdef CONF_PLATFORM_N64
++	// The target HUD and match shell read the authoritative team score directly
++	// because there is no client snapshot pipeline. Read-only and target-only.
++	int GetTeamScore(int Team) const { return m_aTeamscore[Team&1]; }
++#endif
++

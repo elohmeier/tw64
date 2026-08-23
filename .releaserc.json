@@ -1,0 +1,33 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "dist/teeworlds64.z64",
+            "label": "Teeworlds 64 playable ROM"
+          },
+          {
+            "path": "dist/teeworlds64-s1.z64",
+            "label": "Deterministic simulation ROM 1"
+          },
+          {
+            "path": "dist/teeworlds64-s2.z64",
+            "label": "Deterministic simulation ROM 2"
+          },
+          {
+            "path": "dist/SHA256SUMS",
+            "label": "SHA-256 checksums"
+          }
+        ],
+        "successComment": false,
+        "failComment": false
+      }
+    ]
+  ]
+}

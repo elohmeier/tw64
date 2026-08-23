@@ -1,0 +1,8 @@
+[submodule "teeworlds"]
+	path = teeworlds
+	url = https://github.com/elohmeier/teeworlds.git
+	branch = bots
+[submodule "libdragon"]
+	path = libdragon
+	url = https://github.com/DragonMinded/libdragon.git
+	branch = preview

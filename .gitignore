@@ -1,0 +1,14 @@
+/build/
+/dist/
+/generated/
+/filesystem/gfx/
+/filesystem/maps/
+/filesystem/sfx/
+/filesystem/ui/
+/teeworlds64.z64
+/teeworlds64-s1.z64
+/teeworlds64-s2.z64
+/teeworlds64-auto-*.z64
+/node_modules/
+*.log
+__pycache__/

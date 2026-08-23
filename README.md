@@ -1,0 +1,63 @@
+# Teeworlds 64
+
+Teeworlds 64 is an unofficial, purpose-built offline adaptation of Teeworlds
+for an Expansion Pak Nintendo 64. It currently provides deterministic bots,
+one to four local players, split-screen rendering, the bundled DM/CTF/LMS
+maps and modes, and converted Teeworlds graphics and sound.
+
+The port compiles shared gameplay and server rules from a pinned
+[`elohmeier/teeworlds`](https://github.com/elohmeier/teeworlds/tree/bots)
+submodule. Target code lives here. A narrow patch is applied to a generated
+copy during the build, leaving the submodule clean and making upstream update
+conflicts explicit. Libdragon's upstream `preview` branch is also a pinned
+submodule and is rebuilt in a digest-pinned toolchain container.
+
+## Build
+
+Clone recursively, install Python build dependencies, then build the pinned
+toolchain and ROMs:
+
+```sh
+git clone --recursive https://github.com/elohmeier/tw64.git
+cd tw64
+python3 -m pip install -r requirements-build.txt
+make image
+make ci
+```
+
+Set `DOCKER=docker` when Docker is preferred over the default Podman:
+
+```sh
+make DOCKER=docker image ci
+```
+
+The build also needs CMake, a host C/C++ compiler, GNU Make, Git, Python 3,
+and FFmpeg. `make ci` produces and structurally verifies:
+
+- `teeworlds64.z64` — playable ROM
+- `teeworlds64-s1.z64` and `teeworlds64-s2.z64` — deterministic regression ROMs
+- `dist/SHA256SUMS` — release checksums
+
+`make rom-all` additionally creates all unattended autoplay variants used for
+local emulator and hardware qualification. Emulator throughput is automation
+evidence only; real 50 Hz performance still needs emulator cycle measurements
+and physical hardware validation.
+
+## Releases and updates
+
+Every pull request builds and verifies the three release ROMs. A successful
+push to `main` runs semantic-release and publishes conventional-commit releases
+with the ROMs and checksums attached. Use `feat:`, `fix:`, and breaking-change
+commit conventions to control versioning.
+
+Both upstream dependencies are immutable gitlinks. Dependabot proposes updates
+to the `bots` and `preview` tips; each update must pass source patching, the
+frozen host state hash, observation invariants, deterministic replay, and the
+ROM build before merge.
+
+## License
+
+The source is provided under the Teeworlds zlib-style license in [LICENSE](LICENSE).
+Teeworlds data has its own CC-BY-SA terms documented there, and libdragon's
+license remains in its submodule. This project is an altered, unofficial port
+and is not endorsed by the Teeworlds project or Nintendo.
