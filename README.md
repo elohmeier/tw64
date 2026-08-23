@@ -12,6 +12,15 @@ copy during the build, leaving the submodule clean and making upstream update
 conflicts explicit. Libdragon's upstream `preview` branch is also a pinned
 submodule and is rebuilt in a digest-pinned toolchain container.
 
+## Gameplay showcase
+
+[![Teeworlds 64 Nintendo 64 gameplay showcase](https://i.ytimg.com/vi/ji8Y1ZodEts/hqdefault.jpg)](https://www.youtube.com/watch?v=ji8Y1ZodEts)
+
+[Watch the v1.1.2 gameplay showcase on YouTube](https://www.youtube.com/watch?v=ji8Y1ZodEts).
+It covers the menu, offline bots, all five game modes, several map themes, and
+two-, three-, and four-player split screen. The footage was captured directly
+from the ROM with Gopher64.
+
 ## Screenshots
 
 Captured directly from the ROM with Gopher64.
