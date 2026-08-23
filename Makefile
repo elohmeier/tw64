@@ -201,8 +201,9 @@ verify-rom: rom-game rom-sim
 
 package: verify-rom
 	@mkdir -p dist
-	cp -f teeworlds64.z64 teeworlds64-s1.z64 teeworlds64-s2.z64 dist/
-	cd dist && sha256sum teeworlds64.z64 teeworlds64-s1.z64 teeworlds64-s2.z64 > SHA256SUMS
+	@rm -f dist/teeworlds64-s1.z64 dist/teeworlds64-s2.z64
+	cp -f teeworlds64.z64 dist/
+	cd dist && sha256sum teeworlds64.z64 > SHA256SUMS
 
 ci: verify-host package
 

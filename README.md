@@ -12,6 +12,20 @@ copy during the build, leaving the submodule clean and making upstream update
 conflicts explicit. Libdragon's upstream `preview` branch is also a pinned
 submodule and is rebuilt in a digest-pinned toolchain container.
 
+## Screenshots
+
+Captured directly from the ROM with Gopher64.
+
+### Main menu
+
+![Teeworlds 64 main menu](docs/screenshots/menu.png)
+
+### Gameplay
+
+| Single player | Four-player split screen |
+| --- | --- |
+| ![Single-player deathmatch against three bots](docs/screenshots/single-player.png) | ![Four-player split-screen deathmatch](docs/screenshots/four-player.png) |
+
 ## Build
 
 Clone recursively, install Python build dependencies, then build the pinned
@@ -32,11 +46,15 @@ make DOCKER=docker image ci
 ```
 
 The build also needs CMake, a host C/C++ compiler, GNU Make, Git, Python 3,
-and FFmpeg. `make ci` produces and structurally verifies:
+and FFmpeg. `make ci` builds and structurally verifies:
 
 - `teeworlds64.z64` — playable ROM
-- `teeworlds64-s1.z64` and `teeworlds64-s2.z64` — deterministic regression ROMs
-- `dist/SHA256SUMS` — release checksums
+- `teeworlds64-s1.z64` and `teeworlds64-s2.z64` — non-interactive,
+  deterministic regression fixtures
+
+`dist/` contains only the playable ROM and its `SHA256SUMS` entry. The
+simulation fixtures print and hash fixed matches without the playable menu or
+renderer; CI verifies them, but releases do not publish them.
 
 `make rom-all` additionally creates all unattended autoplay variants used for
 local emulator and hardware qualification. Emulator throughput is automation
@@ -45,10 +63,12 @@ and physical hardware validation.
 
 ## Releases and updates
 
-Every pull request builds and verifies the three release ROMs. A successful
-push to `main` runs semantic-release and publishes conventional-commit releases
-with the ROMs and checksums attached. Use `feat:`, `fix:`, and breaking-change
-commit conventions to control versioning.
+Every pull request builds and verifies the playable ROM and both simulation
+fixtures. A successful push to `main` runs semantic-release and publishes a
+conventional-commit release with `teeworlds64.z64` and its checksum attached.
+Release notes automatically explain why the simulation fixtures remain
+CI-only. Use `feat:`, `fix:`, and breaking-change commit conventions to control
+versioning.
 
 Both upstream dependencies are immutable gitlinks. Dependabot proposes updates
 to the `bots` and `preview` tips; each update must pass source patching, the
