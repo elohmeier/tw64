@@ -145,6 +145,8 @@ const CTw64MapEntry s_aMaps[] = {
     {"ctf7", true, "GRASS"},           {"ctf8", true, "JUNGLE"}};
 
 const int TW64_NUM_MAPS = (int)(sizeof(s_aMaps) / sizeof(s_aMaps[0]));
+static_assert(TW64_NUM_MAPS == 16,
+              "map preview catalog must match the generated sprite set");
 
 int MapCount(bool Flags) {
   int Count = 0;
@@ -154,24 +156,25 @@ int MapCount(bool Flags) {
   return Count;
 }
 
-const char *MapAt(bool Flags, int Index) {
+int MapCatalogIndex(bool Flags, int Index) {
   for (int i = 0; i < TW64_NUM_MAPS; ++i) {
     if (s_aMaps[i].m_Flags != Flags)
       continue;
     if (Index-- == 0)
-      return s_aMaps[i].m_pName;
+      return i;
   }
-  return s_aMaps[0].m_pName;
+  for (int i = 0; i < TW64_NUM_MAPS; ++i)
+    if (s_aMaps[i].m_Flags == Flags)
+      return i;
+  return 0;
+}
+
+const char *MapAt(bool Flags, int Index) {
+  return s_aMaps[MapCatalogIndex(Flags, Index)].m_pName;
 }
 
 const char *MapThemeAt(bool Flags, int Index) {
-  for (int i = 0; i < TW64_NUM_MAPS; ++i) {
-    if (s_aMaps[i].m_Flags != Flags)
-      continue;
-    if (Index-- == 0)
-      return s_aMaps[i].m_pTheme;
-  }
-  return "";
+  return s_aMaps[MapCatalogIndex(Flags, Index)].m_pTheme;
 }
 
 int MapIndex(bool Flags, const char *pName) {
@@ -1108,7 +1111,14 @@ enum {
   TW64_MENU_ROW_Y = 88,
   TW64_MENU_ROW_STEP = 15,
   TW64_MENU_LABEL_X = 42,
-  TW64_MENU_NOTE_X = 286
+  TW64_MENU_NOTE_X = 286,
+  /* The map page keeps the eight-row list but gives its notes column to a
+   * selected-map scene. The preview is stored at this exact screen size. */
+  TW64_MAP_LIST_W = 112,
+  TW64_MAP_PREVIEW_X = 156,
+  TW64_MAP_PREVIEW_Y = 94,
+  TW64_MAP_PREVIEW_W = 128,
+  TW64_MAP_PREVIEW_H = 96
 };
 
 struct CMenuRow {
@@ -1279,7 +1289,9 @@ void DrawMenuFrame(int Page, int Selection, int Pads) {
   /* The selected row gets both a highlight band and a gold marker down its
    * left edge: colour alone is easy to lose on a composite signal. */
   const int SelY = TW64_MENU_ROW_Y + Selection * TW64_MENU_ROW_STEP;
-  Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, TW64_PAGE_BODY_W,
+  const int SelW =
+      Page == TW64_PAGE_MAP ? (int)TW64_MAP_LIST_W : (int)TW64_PAGE_BODY_W;
+  Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, SelW,
                   TW64_MENU_ROW_STEP, 34, 62, 116, 205);
   Tw64RenderShade(TW64_PAGE_BODY_X, SelY - 3, 3, TW64_MENU_ROW_STEP, 255, 208,
                   80, 255);
@@ -1297,18 +1309,15 @@ void DrawMenuFrame(int Page, int Selection, int Pads) {
     else
       Tw64RenderTextF(TW64_FONT_MENU, TW64_MENU_LABEL_X, Y, Row.m_aText, 205,
                       215, 235, TW64_ALIGN_LEFT);
-    if (Row.m_aNote[0])
+    if (Page != TW64_PAGE_MAP && Row.m_aNote[0])
       Tw64RenderTextF(TW64_FONT_SMALL, TW64_MENU_NOTE_X, Y + 2, Row.m_aNote,
                       Active ? 190 : 122, Active ? 205 : 140,
                       Active ? 230 : 172, TW64_ALIGN_RIGHT);
   }
 
-  /* Detail block: the mode page carries the control map under its list, the
-   * two short pages explain the choice they are asking for, and the
-   * eight-entry map page fills the body on its own and gets nothing. The
-   * two-line detail is bottom-anchored, so a three-entry page and a
-   * four-entry page put it in the same place and only the list length
-   * moves. */
+  /* Detail block: the mode page carries the control map, the two short pages
+   * explain their choice, and the map page turns the old notes column into a
+   * scene window. The explanatory two-line blocks remain bottom-anchored. */
   const int DetailY = 186;
   if (Page == TW64_PAGE_MODE) {
     DrawControlsBlock(TW64_MENU_ROW_Y + g_NumMenuRows * TW64_MENU_ROW_STEP + 2);
@@ -1327,6 +1336,20 @@ void DrawMenuFrame(int Page, int Selection, int Pads) {
                DifficultyPolicy(MenuMode(), Selection));
     Tw64RenderTextF(TW64_FONT_SMALL, TW64_PAGE_BODY_X, DetailY + 12, aPolicy,
                     150, 168, 205, TW64_ALIGN_LEFT);
+  } else if (Page == TW64_PAGE_MAP) {
+    /* One neutral pixel contains the colourful crop without competing with
+     * the gold selection marker or repeating the removed gameplay frames. */
+    Tw64RenderShade(TW64_MAP_PREVIEW_X - 1, TW64_MAP_PREVIEW_Y - 1,
+                    TW64_MAP_PREVIEW_W + 2, TW64_MAP_PREVIEW_H + 2, 18, 22, 30,
+                    255);
+    Tw64RenderMapPreview(
+        MapCatalogIndex(MenuWantsFlagMaps(), Selection), TW64_MAP_PREVIEW_X,
+        TW64_MAP_PREVIEW_Y);
+    Tw64RenderTextF(TW64_FONT_SMALL,
+                    TW64_MAP_PREVIEW_X + TW64_MAP_PREVIEW_W / 2,
+                    TW64_MAP_PREVIEW_Y + TW64_MAP_PREVIEW_H + 8,
+                    g_aMenuRows[Selection].m_aNote, 150, 168, 205,
+                    TW64_ALIGN_CENTER);
   }
   Tw64RenderEndPage();
 }
@@ -1366,13 +1389,11 @@ void RunMenu(CMatchConfig *pConfig) {
   int PageFrames = 0;
   bool Announced = false;
 
-  /* The connected pad count is only the default: gopher64 and some flash
-   * carts report fewer ports than are usable, so the player must be able to
-   * ask for more local players than were detected. */
-  const int Pads0 = ConnectedPads();
+  /* Start with the full-screen single-player setup: one local player and
+   * three bots. Connected controllers remain available through the player
+   * count page, but do not turn the default match into split screen. */
   g_aMenuSelection[TW64_PAGE_MODE] = 0;
-  g_aMenuSelection[TW64_PAGE_PLAYERS] =
-      clamp(Pads0, 1, (int)TW64_MAX_LOCAL) - 1;
+  g_aMenuSelection[TW64_PAGE_PLAYERS] = 0;
   g_aMenuSelection[TW64_PAGE_DIFFICULTY] = 1;
   g_aMenuSelection[TW64_PAGE_MAP] = 0;
 

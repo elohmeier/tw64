@@ -124,7 +124,27 @@ enum {
   SPR_UI_CLOUD1,
   SPR_UI_CLOUD2,
   SPR_UI_MOUNTAINS,
-  NUM_SPRITES
+  /* Build-rendered map-menu previews, in the same order as s_aMaps in
+   * tw_game.cpp and ROM_MAPS in convert_n64_assets.py. */
+  SPR_MAP_PREVIEW_DM1,
+  SPR_MAP_PREVIEW_DM2,
+  SPR_MAP_PREVIEW_DM3,
+  SPR_MAP_PREVIEW_DM6,
+  SPR_MAP_PREVIEW_DM7,
+  SPR_MAP_PREVIEW_DM8,
+  SPR_MAP_PREVIEW_DM9,
+  SPR_MAP_PREVIEW_LMS1,
+  SPR_MAP_PREVIEW_CTF1,
+  SPR_MAP_PREVIEW_CTF2,
+  SPR_MAP_PREVIEW_CTF3,
+  SPR_MAP_PREVIEW_CTF4,
+  SPR_MAP_PREVIEW_CTF5,
+  SPR_MAP_PREVIEW_CTF6,
+  SPR_MAP_PREVIEW_CTF7,
+  SPR_MAP_PREVIEW_CTF8,
+  NUM_SPRITES,
+  SPR_MAP_PREVIEW_FIRST = SPR_MAP_PREVIEW_DM1,
+  NUM_MAP_PREVIEWS = SPR_MAP_PREVIEW_CTF8 - SPR_MAP_PREVIEW_FIRST + 1
 };
 
 /* The three tee parts share one IA8 atlas so a whole tee costs one TMEM
@@ -167,7 +187,23 @@ const char *const s_apSpriteFiles[NUM_SPRITES] = {
     "rom:/gfx/ui_logo.sprite",
     "rom:/gfx/ui_cloud1.sprite",
     "rom:/gfx/ui_cloud2.sprite",
-    "rom:/gfx/ui_mountains.sprite"};
+    "rom:/gfx/ui_mountains.sprite",
+    "rom:/gfx/map_preview_dm1.sprite",
+    "rom:/gfx/map_preview_dm2.sprite",
+    "rom:/gfx/map_preview_dm3.sprite",
+    "rom:/gfx/map_preview_dm6.sprite",
+    "rom:/gfx/map_preview_dm7.sprite",
+    "rom:/gfx/map_preview_dm8.sprite",
+    "rom:/gfx/map_preview_dm9.sprite",
+    "rom:/gfx/map_preview_lms1.sprite",
+    "rom:/gfx/map_preview_ctf1.sprite",
+    "rom:/gfx/map_preview_ctf2.sprite",
+    "rom:/gfx/map_preview_ctf3.sprite",
+    "rom:/gfx/map_preview_ctf4.sprite",
+    "rom:/gfx/map_preview_ctf5.sprite",
+    "rom:/gfx/map_preview_ctf6.sprite",
+    "rom:/gfx/map_preview_ctf7.sprite",
+    "rom:/gfx/map_preview_ctf8.sprite"};
 
 sprite_t *s_apSprites[NUM_SPRITES];
 surface_t s_aSpriteSurfaces[NUM_SPRITES];
@@ -419,6 +455,7 @@ const uint32_t COLOR_LASER = PackColor(180, 235, 255);
 const uint32_t COLOR_LASER_CORE = PackColor(255, 255, 255);
 const uint32_t COLOR_HUD_BACK = PackColor(44, 48, 60);
 const uint32_t COLOR_PANEL = PackColor(10, 12, 20);
+const uint32_t COLOR_VIEWPORT_DIVIDER = PackColor(28, 32, 40);
 const uint32_t COLOR_SKY_FALLBACK = PackColor(14, 16, 26);
 const uint32_t COLOR_WHITE = PackColor(255, 255, 255);
 
@@ -1518,32 +1555,28 @@ bool IsFlagCarrier(int ClientID) {
 /* HUD                                                                    */
 /* --------------------------------------------------------------------- */
 
-void DrawHudPanels(CGameContext *pGameServer, const CTw64RenderInfo *pInfo,
-                   const CTw64Viewport &View) {
-  uint8_t R, G, B;
-  Tw64PlayerColor(View.m_ClientID, &R, &G, &B);
-  const uint32_t Frame = PackColor(R, G, B);
-
-  /* Viewport frame: makes the split obvious and colour-codes the owner. In
-   * team modes an inner band repeats the owner's team so a four-way split is
-   * readable without hunting for the tee. */
-  Fill(View.m_X0, View.m_Y0, View.m_X1, View.m_Y0 + 1, Frame);
-  Fill(View.m_X0, View.m_Y1 - 1, View.m_X1, View.m_Y1, Frame);
-  Fill(View.m_X0, View.m_Y0, View.m_X0 + 1, View.m_Y1, Frame);
-  Fill(View.m_X1 - 1, View.m_Y0, View.m_X1, View.m_Y1, Frame);
-  if (pInfo->m_Teamplay && View.m_ClientID >= 0 &&
-      View.m_ClientID < MAX_CLIENTS && s_aTeam[View.m_ClientID] >= 0) {
-    uint8_t Tr, Tg, Tb;
-    Tw64TeamColor(s_aTeam[View.m_ClientID], 0, &Tr, &Tg, &Tb);
-    Fill(View.m_X0 + 1, View.m_Y1 - 3, View.m_X1 - 1, View.m_Y1 - 1,
-         PackColor(Tr, Tg, Tb));
-  }
-
+void DrawHudPanel(const CTw64RenderInfo *pInfo,
+                  const CTw64Viewport &View) {
   /* HUD backdrop so the icons and text stay readable over bright tiles. It is
    * a dark grey rather than black on purpose: the desktop client's "empty"
    * heart and shield icons are near-black outlines and would disappear. */
-  Fill(View.m_X0 + 1, View.m_Y0 + 1, View.m_X0 + 87,
+  Fill(View.m_X0, View.m_Y0, View.m_X0 + 87,
        View.m_Y0 + (pInfo->m_FlagMode ? 47 : 38), COLOR_HUD_BACK);
+}
+
+/* A split needs only one quiet seam. Drawing it once avoids the doubled shared
+ * edges and outer frame produced by per-viewport borders, while preserving a
+ * clear boundary when adjacent cameras show similar map tiles. */
+void DrawViewportDividers(int NumViewports) {
+  if (NumViewports == 2) {
+    Fill(0, TW64_SCREEN_H / 2, TW64_SCREEN_W, TW64_SCREEN_H / 2 + 1,
+         COLOR_VIEWPORT_DIVIDER);
+  } else if (NumViewports >= 3) {
+    Fill(TW64_SCREEN_W / 2, 0, TW64_SCREEN_W / 2 + 1, TW64_SCREEN_H,
+         COLOR_VIEWPORT_DIVIDER);
+    Fill(0, TW64_SCREEN_H / 2, TW64_SCREEN_W, TW64_SCREEN_H / 2 + 1,
+         COLOR_VIEWPORT_DIVIDER);
+  }
 }
 
 /* Ten hearts and ten shields, the desktop HUD's own full/empty icon rows. */
@@ -1892,6 +1925,18 @@ void Tw64RenderShade(int X, int Y, int W, int H, uint8_t R, uint8_t G,
   s_BoundPalette = -1;
 }
 
+void Tw64RenderMapPreview(int MapIndex, int X, int Y) {
+  if (MapIndex < 0 || MapIndex >= NUM_MAP_PREVIEWS)
+    return;
+  /* Each map owns its CI8 palette. rdpq_sprite_blit uploads and activates that
+   * palette, then slices the 128x96 image through TMEM just like the larger
+   * menu backdrop sprites. The preview is stored at its screen size, so this
+   * path performs no filtering or rescaling on target. */
+  BeginTexturedPhase(false);
+  rdpq_mode_dithering(DITHER_SQUARE_NONE);
+  DrawUiSprite(SPR_MAP_PREVIEW_FIRST + MapIndex, X, Y, 128, 96);
+}
+
 void Tw64RenderBeginMenuPage(surface_t *pDisp, int Frame, bool ShowLogo) {
   rdpq_attach(pDisp, NULL);
   SetClip(0, 0, TW64_SCREEN_W, TW64_SCREEN_H);
@@ -2070,7 +2115,8 @@ void Tw64RenderMatch(surface_t *pDisp, CGameContext *pGameServer,
   rdpq_set_mode_fill(RGBA32(0, 0, 0, 0xff));
   s_HasColor = false;
   for (int v = 0; v < pInfo->m_NumViewports; ++v)
-    DrawHudPanels(pGameServer, pInfo, pInfo->m_pViewports[v]);
+    DrawHudPanel(pInfo, pInfo->m_pViewports[v]);
+  DrawViewportDividers(pInfo->m_NumViewports);
   if (pInfo->m_ScoreQuadrant)
     Fill(TW64_SCREEN_W / 2, TW64_SCREEN_H / 2, TW64_SCREEN_W, TW64_SCREEN_H,
          COLOR_PANEL);

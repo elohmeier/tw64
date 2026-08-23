@@ -113,6 +113,10 @@ void Tw64RenderTextF(int Font, int X, int Y, const char *pText, uint8_t R,
 void Tw64RenderShade(int X, int Y, int W, int H, uint8_t R, uint8_t G,
                      uint8_t B, uint8_t A);
 
+/* Draws one build-rendered 128x96 map preview into an attached menu page.
+ * `MapIndex` follows the staged map catalog order in tw_game.cpp. */
+void Tw64RenderMapPreview(int MapIndex, int X, int Y);
+
 /* The full-screen menu/end-screen background: a night-sky gradient, two
  * drifting clouds and a mountain silhouette, all from the desktop client's own
  * mapres, plus the official logo. `Frame` animates the clouds; `ShowLogo` is
@@ -120,8 +124,7 @@ void Tw64RenderShade(int X, int Y, int W, int H, uint8_t R, uint8_t G,
  * caller must finish with Tw64RenderEndPage(). */
 void Tw64RenderBeginMenuPage(surface_t *pDisp, int Frame, bool ShowLogo);
 
-/* Stable per-slot colour, shared by viewport frames, HUD, scoreboard and the
- * tee body tint. */
+/* Stable per-slot colour, shared by HUD labels, scoreboard and tee body tint. */
 void Tw64PlayerColor(int ClientID, uint8_t *pR, uint8_t *pG, uint8_t *pB);
 
 /* Team colour for team modes. `Team` is TEAM_RED (0) or TEAM_BLUE (1); the

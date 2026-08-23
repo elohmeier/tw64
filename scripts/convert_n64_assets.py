@@ -12,7 +12,7 @@ table from -- and tileset tiles are cut on the 16x16 grid the client's
 derived by parsing the shipped ``.map`` datafiles, so an unreferenced or
 missing image is a hard error instead of a silent gap on target.
 
-Three asset classes, three deliberate formats:
+Five asset classes, four deliberate formats:
 
 * ``gfx/spr_*.sprite`` -- RGBA16 cut-outs of ``game.png`` (weapons, projectiles,
   hook, pickups, flags, HUD icons). Small, individually colourful, never
@@ -38,6 +38,10 @@ Three asset classes, three deliberate formats:
   90 degrees clockwise, because the RDP's texture rectangle cannot transpose
   the S/T axes; the renderer loads it lazily, only for maps that actually use
   ``TILEFLAG_ROTATE``.
+* ``gfx/map_preview_*.sprite`` -- CI8 menu thumbnails rendered deterministically
+  from each map's target-visible tile layers. Each map keeps its own 256-colour
+  palette; a generated contact sheet makes the automatic camera crops easy to
+  review without booting an emulator.
 
 The PNG slicing runs on the host with Pillow; the PNG -> ``.sprite``
 conversion runs ``mksprite`` inside the libdragon toolchain container, the same
@@ -49,15 +53,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
+import statistics
 import struct
 import subprocess
 import sys
 import zlib
 from dataclasses import dataclass, field
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 # --------------------------------------------------------------------------
 # Sizing model
@@ -71,6 +77,32 @@ from PIL import Image
 
 TILE_PIXELS = 16  # per tileset tile, drawn at 12 screen pixels
 TILES_PER_ROW = 16  # the client's fixed 16x16 tileset grid
+
+# Map-menu previews are rendered at twice their stored size, then reduced once
+# with Pillow's high-quality filter. The working canvas uses the target's own
+# 0.375 world scale, so the thumbnail shows a slightly tighter, more legible
+# 21x16-tile camera without inventing a separate map-art style.
+MAP_PREVIEW_W = 128
+MAP_PREVIEW_H = 96
+MAP_PREVIEW_SUPERSAMPLE = 2
+MAP_PREVIEW_RENDER_W = MAP_PREVIEW_W * MAP_PREVIEW_SUPERSAMPLE
+MAP_PREVIEW_RENDER_H = MAP_PREVIEW_H * MAP_PREVIEW_SUPERSAMPLE
+MAP_PREVIEW_WORLD_SCALE = 0.375
+MAP_TILE_WORLD_SIZE = 32
+
+# Automatic anchors are deliberately the default. A map may opt into an
+# art-directed camera in tile coordinates if the generated contact sheet shows
+# that its spawn/flag midpoint is not its most recognisable room.
+MAP_PREVIEW_CAMERA_OVERRIDES = {
+    # These very wide CTF maps have visually sparse midfields. Frame the red
+    # base instead: it carries the same mirrored geometry as blue and shows
+    # more of each map's material language at thumbnail scale.
+    "ctf2": (35.5, 26.5),
+    "ctf5": (32.5, 61.5),
+    # ctf4's flag stands are at the bottom edge; the central spawn deck is the
+    # representative jungle room and avoids a crop dominated by the border.
+    "ctf4": (90.5, 25.5),
+}
 
 # name in content.py -> (output basename, width, height)
 # Widths are multiples of 4 so an RGBA16 TMEM line stays 8-byte aligned.
@@ -158,8 +190,18 @@ MAPITEMTYPE_GROUP = 4
 MAPITEMTYPE_LAYER = 5
 
 LAYERTYPE_TILES = 2
+LAYERTYPE_QUADS = 3
 TILESLAYERFLAG_GAME = 1
+TILEFLAG_VFLIP = 1
+TILEFLAG_HFLIP = 2
 TILEFLAG_ROTATE = 8
+
+ENTITY_OFFSET = 255 - 16 * 4
+ENTITY_SPAWN = ENTITY_OFFSET + 1
+ENTITY_SPAWN_RED = ENTITY_OFFSET + 2
+ENTITY_SPAWN_BLUE = ENTITY_OFFSET + 3
+ENTITY_FLAGSTAND_RED = ENTITY_OFFSET + 4
+ENTITY_FLAGSTAND_BLUE = ENTITY_OFFSET + 5
 
 # Every map staged into the ROM filesystem; must match ROM_MAPS in Makefile
 # and s_aMaps[] in src/game/tw_game.cpp.
@@ -471,7 +513,7 @@ def scan_map_tilesets(map_path: str):
 
 
 # --------------------------------------------------------------------------
-# Conversion steps
+# Map-menu preview renderer
 # --------------------------------------------------------------------------
 
 
@@ -481,6 +523,340 @@ class Job:
 
     png: str
     fmt: str
+
+
+@dataclass
+class PreviewLayer:
+    width: int
+    height: int
+    tiles: list
+    image: str
+    color: tuple
+    offset_x: int
+    offset_y: int
+    parallax_x: float
+    parallax_y: float
+    clip: tuple | None
+
+
+@dataclass
+class PreviewMap:
+    sky: tuple
+    game_width: int
+    game_height: int
+    markers: list
+    layers: list
+
+
+def parse_preview_map(map_path: str) -> PreviewMap:
+    """Read the static subset the target renderer can actually display.
+
+    This intentionally follows ``Tw64RenderSetMap`` rather than the desktop
+    client: textured tile layers are rendered with group transforms, while the
+    first untextured quad contributes the target's flat sky colour. A preview
+    therefore never promises decorative quad art that the match will omit.
+    """
+    df = DataFile(map_path)
+    image_start, image_count = df.type_range(MAPITEMTYPE_IMAGE)
+    images = []
+    for i in range(image_count):
+        _typ, payload = df.item(image_start + i)
+        _ver, _w, _h, external, name_idx, data_idx = ints(payload, 6)
+        images.append((df.string(name_idx), external, data_idx))
+
+    group_start, group_count = df.type_range(MAPITEMTYPE_GROUP)
+    layer_start, _layer_count = df.type_range(MAPITEMTYPE_LAYER)
+    sky = None
+    game_width = 0
+    game_height = 0
+    markers = []
+    layers = []
+
+    for g in range(group_count):
+        _typ, gp = df.item(group_start + g)
+        group_version = ints(gp, 1)[0]
+        offset_x, offset_y, parallax_x, parallax_y, first_layer, num_layers = ints(
+            gp, 6, 1
+        )
+        clip = None
+        if group_version >= 2 and len(gp) >= 12 * 4:
+            use_clip, clip_x, clip_y, clip_w, clip_h = ints(gp, 5, 7)
+            if use_clip:
+                clip = (clip_x, clip_y, clip_w, clip_h)
+
+        for i in range(num_layers):
+            _typ, lp = df.item(layer_start + first_layer + i)
+            _layer_version, layer_type, _layer_flags = ints(lp, 3)
+
+            if layer_type == LAYERTYPE_QUADS and sky is None and len(lp) >= 7 * 4:
+                _quad_version, num_quads, data_idx, image_idx = ints(lp, 4, 3)
+                if image_idx == -1 and num_quads > 0:
+                    quad = df.data(data_idx)
+                    if len(quad) >= 18 * 4:
+                        colors = ints(quad, 8, 10)
+                        sky = tuple(
+                            (colors[c] + colors[4 + c]) // 2 for c in range(3)
+                        )
+                continue
+
+            if layer_type != LAYERTYPE_TILES or len(lp) < 15 * 4:
+                continue
+            tile_version, width, height, tile_flags = ints(lp, 4, 3)
+            color = ints(lp, 4, 7)
+            _color_env, _color_env_offset, image_idx, data_idx = ints(lp, 4, 11)
+            tile_data = expand_tiles(
+                df.data(data_idx), width * height, tile_version
+            )
+
+            if tile_flags & TILESLAYERFLAG_GAME:
+                game_width = width
+                game_height = height
+                for pos, (index, _flags) in enumerate(tile_data):
+                    if index in (
+                        ENTITY_SPAWN,
+                        ENTITY_SPAWN_RED,
+                        ENTITY_SPAWN_BLUE,
+                        ENTITY_FLAGSTAND_RED,
+                        ENTITY_FLAGSTAND_BLUE,
+                    ):
+                        markers.append(
+                            (index, pos % width + 0.5, pos // width + 0.5)
+                        )
+                continue
+            if image_idx < 0:
+                continue
+            if image_idx >= len(images):
+                raise ConvertError(
+                    f"{map_path}: preview layer references image {image_idx} "
+                    f"of {len(images)}"
+                )
+            image, external, embedded_idx = images[image_idx]
+            if not external and embedded_idx >= 0:
+                raise ConvertError(
+                    f"{map_path}: preview image '{image}' is embedded; only "
+                    "external mapres are supported"
+                )
+            # Keep the same fixed layer budget as the target renderer.
+            if len(layers) < 16:
+                layers.append(
+                    PreviewLayer(
+                        width,
+                        height,
+                        tile_data,
+                        image,
+                        color,
+                        offset_x,
+                        offset_y,
+                        parallax_x * 0.01,
+                        parallax_y * 0.01,
+                        clip,
+                    )
+                )
+
+    if game_width <= 0 or game_height <= 0:
+        raise ConvertError(f"{map_path}: no game layer for preview camera")
+    return PreviewMap(
+        sky or (14, 16, 26), game_width, game_height, markers, layers
+    )
+
+
+def preview_camera(name: str, preview_map: PreviewMap) -> tuple:
+    """Choose and clamp a stable camera in world coordinates."""
+    override = MAP_PREVIEW_CAMERA_OVERRIDES.get(name)
+    if override is not None:
+        tile_x, tile_y = override
+    else:
+        flags = [
+            (x, y)
+            for marker, x, y in preview_map.markers
+            if marker in (ENTITY_FLAGSTAND_RED, ENTITY_FLAGSTAND_BLUE)
+        ]
+        spawns = [
+            (x, y)
+            for marker, x, y in preview_map.markers
+            if marker in (ENTITY_SPAWN, ENTITY_SPAWN_RED, ENTITY_SPAWN_BLUE)
+        ]
+        anchors = flags if len(flags) >= 2 else spawns
+        if anchors:
+            tile_x = statistics.median(x for x, _y in anchors)
+            tile_y = statistics.median(y for _x, y in anchors)
+        else:
+            tile_x = preview_map.game_width * 0.5
+            tile_y = preview_map.game_height * 0.5
+
+    camera_x = tile_x * MAP_TILE_WORLD_SIZE
+    camera_y = tile_y * MAP_TILE_WORLD_SIZE
+    half_w = MAP_PREVIEW_RENDER_W / (2.0 * MAP_PREVIEW_WORLD_SCALE)
+    half_h = MAP_PREVIEW_RENDER_H / (2.0 * MAP_PREVIEW_WORLD_SCALE)
+    world_w = preview_map.game_width * MAP_TILE_WORLD_SIZE
+    world_h = preview_map.game_height * MAP_TILE_WORLD_SIZE
+    camera_x = world_w * 0.5 if world_w <= 2 * half_w else min(
+        max(camera_x, half_w), world_w - half_w
+    )
+    camera_y = world_h * 0.5 if world_h <= 2 * half_h else min(
+        max(camera_y, half_h), world_h - half_h
+    )
+    return camera_x, camera_y
+
+
+def composite_clipped(dest: Image.Image, src: Image.Image, x: int, y: int, clip):
+    x0 = max(x, clip[0], 0)
+    y0 = max(y, clip[1], 0)
+    x1 = min(x + src.width, clip[2], dest.width)
+    y1 = min(y + src.height, clip[3], dest.height)
+    if x1 <= x0 or y1 <= y0:
+        return
+    cut = src.crop((x0 - x, y0 - y, x1 - x, y1 - y))
+    dest.alpha_composite(cut, (x0, y0))
+
+
+def render_map_preview(
+    name: str, preview_map: PreviewMap, datasrc: str, sheet_cache: dict
+) -> Image.Image:
+    camera_x, camera_y = preview_camera(name, preview_map)
+    canvas = Image.new(
+        "RGBA",
+        (MAP_PREVIEW_RENDER_W, MAP_PREVIEW_RENDER_H),
+        preview_map.sky + (255,),
+    )
+    center_x = MAP_PREVIEW_RENDER_W // 2
+    center_y = MAP_PREVIEW_RENDER_H // 2
+    tile_screen = int(MAP_TILE_WORLD_SIZE * MAP_PREVIEW_WORLD_SCALE)
+    tile_cache = {}
+
+    def screen_x(world_x, layer_camera_x):
+        return center_x + int(
+            (world_x - layer_camera_x) * MAP_PREVIEW_WORLD_SCALE
+        )
+
+    def screen_y(world_y, layer_camera_y):
+        return center_y + int(
+            (world_y - layer_camera_y) * MAP_PREVIEW_WORLD_SCALE
+        )
+
+    for layer in preview_map.layers:
+        layer_camera_x = layer.offset_x + camera_x * layer.parallax_x
+        layer_camera_y = layer.offset_y + camera_y * layer.parallax_y
+        left = layer_camera_x - center_x / MAP_PREVIEW_WORLD_SCALE
+        right = layer_camera_x + center_x / MAP_PREVIEW_WORLD_SCALE
+        top = layer_camera_y - center_y / MAP_PREVIEW_WORLD_SCALE
+        bottom = layer_camera_y + center_y / MAP_PREVIEW_WORLD_SCALE
+        tx0 = math.floor(left / MAP_TILE_WORLD_SIZE)
+        tx1 = math.floor(right / MAP_TILE_WORLD_SIZE)
+        ty0 = math.floor(top / MAP_TILE_WORLD_SIZE)
+        ty1 = math.floor(bottom / MAP_TILE_WORLD_SIZE)
+
+        draw_clip = (0, 0, MAP_PREVIEW_RENDER_W, MAP_PREVIEW_RENDER_H)
+        if layer.clip:
+            clip_x, clip_y, clip_w, clip_h = layer.clip
+            draw_clip = (
+                max(0, screen_x(clip_x, camera_x)),
+                max(0, screen_y(clip_y, camera_y)),
+                min(MAP_PREVIEW_RENDER_W, screen_x(clip_x + clip_w, camera_x)),
+                min(MAP_PREVIEW_RENDER_H, screen_y(clip_y + clip_h, camera_y)),
+            )
+            if draw_clip[2] <= draw_clip[0] or draw_clip[3] <= draw_clip[1]:
+                continue
+
+        sheet = sheet_cache.get(layer.image)
+        if sheet is None:
+            source = load_rgba(
+                os.path.join(datasrc, "mapres", f"{layer.image}.png")
+            )
+            sheet = build_tileset_sheet(source, rotate=False)
+            sheet_cache[layer.image] = sheet
+
+        for ty in range(ty0, ty1 + 1):
+            map_y = min(max(ty, 0), layer.height - 1)
+            for tx in range(tx0, tx1 + 1):
+                map_x = min(max(tx, 0), layer.width - 1)
+                index, flags = layer.tiles[map_y * layer.width + map_x]
+                if not index:
+                    continue
+                relevant_flags = flags & (
+                    TILEFLAG_VFLIP | TILEFLAG_HFLIP | TILEFLAG_ROTATE
+                )
+                key = (layer.image, index, relevant_flags, layer.color)
+                tile = tile_cache.get(key)
+                if tile is None:
+                    sx = (index % TILES_PER_ROW) * TILE_PIXELS
+                    sy = (index // TILES_PER_ROW) * TILE_PIXELS
+                    tile = sheet.crop((sx, sy, sx + TILE_PIXELS, sy + TILE_PIXELS))
+                    rotated = bool(relevant_flags & TILEFLAG_ROTATE)
+                    if rotated:
+                        tile = tile.transpose(Image.Transpose.ROTATE_270)
+                    flip_x = bool(
+                        relevant_flags
+                        & (TILEFLAG_HFLIP if rotated else TILEFLAG_VFLIP)
+                    )
+                    flip_y = bool(
+                        relevant_flags
+                        & (TILEFLAG_VFLIP if rotated else TILEFLAG_HFLIP)
+                    )
+                    if flip_x:
+                        tile = tile.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                    if flip_y:
+                        tile = tile.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+                    tile = resize_rgba(tile, tile_screen, tile_screen)
+                    tile = ImageChops.multiply(
+                        tile, Image.new("RGBA", tile.size, layer.color)
+                    )
+                    tile_cache[key] = tile
+                x = screen_x(tx * MAP_TILE_WORLD_SIZE, layer_camera_x)
+                y = screen_y(ty * MAP_TILE_WORLD_SIZE, layer_camera_y)
+                composite_clipped(canvas, tile, x, y, draw_clip)
+
+    preview = resize_rgba(canvas, MAP_PREVIEW_W, MAP_PREVIEW_H)
+    rgb_preview = preview.convert("RGB")
+    colors = rgb_preview.getcolors(maxcolors=MAP_PREVIEW_W * MAP_PREVIEW_H)
+    flat = Image.new("RGB", preview.size, rgb_preview.getpixel((0, 0)))
+    if (colors is not None and len(colors) < 8) or ImageChops.difference(
+        rgb_preview, flat
+    ).getbbox() is None:
+        raise ConvertError(f"{name}: generated map preview is blank or near-uniform")
+    return preview
+
+
+def convert_map_previews(datasrc: str, maps_dir: str, scratch: str, verbose: bool):
+    jobs = []
+    previews = []
+    sheet_cache = {}
+    for name in ROM_MAPS:
+        preview_map = parse_preview_map(os.path.join(maps_dir, f"{name}.map"))
+        preview = render_map_preview(name, preview_map, datasrc, sheet_cache)
+        path = os.path.join(scratch, f"map_preview_{name}.png")
+        preview.save(path)
+        jobs.append(Job(path, "CI8"))
+        previews.append((name, preview))
+        if verbose:
+            camera_x, camera_y = preview_camera(name, preview_map)
+            print(
+                f"  preview {name:<4} camera=({camera_x / MAP_TILE_WORLD_SIZE:.1f},"
+                f"{camera_y / MAP_TILE_WORLD_SIZE:.1f}) "
+                f"layers={len(preview_map.layers)}"
+            )
+
+    cell_h = MAP_PREVIEW_H + 16
+    contact = Image.new(
+        "RGB", (MAP_PREVIEW_W * 4, cell_h * 4), (10, 12, 20)
+    )
+    draw = ImageDraw.Draw(contact)
+    for i, (name, preview) in enumerate(previews):
+        x = (i % 4) * MAP_PREVIEW_W
+        y = (i // 4) * cell_h
+        contact.paste(preview.convert("RGB"), (x, y))
+        draw.text(
+            (x + 4, y + MAP_PREVIEW_H + 2),
+            name.upper(),
+            fill=(220, 225, 235),
+        )
+    contact.save(os.path.join(scratch, "map_previews_contact.png"))
+    return jobs
+
+
+# --------------------------------------------------------------------------
+# Conversion steps
+# --------------------------------------------------------------------------
 
 
 def convert_game_sprites(datasrc: str, content: Content, scratch: str) -> list:
@@ -767,6 +1143,7 @@ def main(argv=None) -> int:
     jobs = convert_game_sprites(datasrc, content, scratch)
     jobs += convert_tee_parts(datasrc, content, scratch)
     jobs += convert_ui_sprites(datasrc, scratch)
+    jobs += convert_map_previews(datasrc, maps_dir, scratch, verbose)
     tile_jobs, tilesets = convert_tilesets(datasrc, maps_dir, scratch, verbose)
     jobs += tile_jobs
 
@@ -779,6 +1156,7 @@ def main(argv=None) -> int:
             {
                 "fingerprint": fingerprint,
                 "sprites": len(jobs),
+                "map_previews": ROM_MAPS,
                 "tilesets": {k: bool(v) for k, v in sorted(tilesets.items())},
                 "bytes": sizes,
             },
