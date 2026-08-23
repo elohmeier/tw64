@@ -13,10 +13,10 @@
 namespace {
 
 // The host reference runs on x86 SSE with every floating point exception
-// masked. libdragon enables overflow/div0/invalid traps in debug builds, which
-// would turn an ordinary 0/0 in normalize() into a crash instead of a NaN, so
-// force the IEEE default masking here. The FS (flush denormals) bit stays set
-// because the VR4300 cannot represent denormals at all.
+// masked. libdragon enables overflow/div0/invalid traps in debug builds, so
+// force the IEEE default masking here. The VR4300's unimplemented-operation
+// trap cannot be masked: target code must never feed NaNs or denormals into a
+// computational instruction. FS handles denormalized results only.
 void ConfigureFpuForIeeeDefaults() {
   uint32_t Fcr31 = C1_FCR31();
   Fcr31 &= ~C1_ENABLE_MASK;

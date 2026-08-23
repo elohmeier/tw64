@@ -18,6 +18,16 @@ index 2028f5a..3221bc0 100644
 @@ -87 +99 @@
 -#if defined(__GNUC__) && !defined(__APPLE__) && !defined(__MINGW32__) && !defined(__sun)
 +#if defined(__GNUC__) && !defined(CONF_PLATFORM_N64) && !defined(__APPLE__) && !defined(__MINGW32__) && !defined(__sun)
+diff --git a/src/game/gamecore.cpp b/src/game/gamecore.cpp
+index 1b1b6ac..a9f3a80 100644
+--- a/src/game/gamecore.cpp
++++ b/src/game/gamecore.cpp
+@@ -3,0 +4,2 @@
++
++#include "src/platform/tw_fp_safety.h"
+@@ -386 +388 @@ void CCharacterCore::Move()
++		int End = Tw64CollisionSweepEnd(Distance);
+-		int End = Distance+1;
 diff --git a/src/game/server/entities/laser.h b/src/game/server/entities/laser.h
 index 8ae6f79..1f221b0 100644
 --- a/src/game/server/entities/laser.h

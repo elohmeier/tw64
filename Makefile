@@ -12,6 +12,7 @@ JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 PYTHON ?= python3
 CMAKE ?= cmake
 VARIANT ?= game
+FP_SAFETY_TEST = $(PROJECT_ROOT)/build/tests/fp_safety_test
 
 # The generated protocol/data tables come from the pinned host source so the
 # ROM and its deterministic reference executable cannot drift apart.
@@ -33,7 +34,14 @@ AUTOPLAY_VARIANTS = \
 GAME_VARIANTS = game $(AUTOPLAY_VARIANTS)
 
 .PHONY: image host prepare generated rom rom-all rom-sim rom-game rom-autoplay stage \
-	verify-host verify-rom package ci clean
+	verify-fp-safety verify-host verify-rom package ci clean
+
+$(FP_SAFETY_TEST): tests/fp_safety_test.cpp src/platform/tw_fp_safety.h
+	@mkdir -p $(dir $@)
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(PROJECT_ROOT) $< -o $@
+
+verify-fp-safety: $(FP_SAFETY_TEST)
+	$(FP_SAFETY_TEST)
 
 # Build libdragon from the pinned upstream preview submodule. The Dockerfile's
 # base image digest pins the compiler layer independently from this source pin.
@@ -193,7 +201,7 @@ rom-sim: stage
 
 rom-all: rom-game rom-autoplay rom-sim
 
-verify-host: host
+verify-host: host verify-fp-safety
 	$(PYTHON) scripts/verify_host.py $(HOST_BUILD)/botbench
 
 verify-rom: rom-game rom-sim
